@@ -35,13 +35,13 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 
   Calendars are sorted by `(source_title, title, id)`.
 - R3. `Event` fields:
-  - Identity: `id` (opaque string, unique within one document; see Pending decision D5), `external_id`, `event_identifier`.
+  - Identity: `id` (opaque string, unique within one response; its format is not part of the contract), `external_id`, `event_identifier`. Documented consumer dedupe key: `(external_id, occurrence_start)`, only when `external_id` is non-null; rows with a null `external_id` are never deduped. This guidance is provisional until Phase 0 reports whether one invite in two calendars actually shares an external id.
   - Content: `title`, `location`, `url`, `notes` (only when `include_notes=True`, else `None`).
-  - Time: `start`, `end` (tz-aware, end exclusive; serialization offset per Pending decision D2), `all_day`, `time_zone`.
+  - Time: `start`, `end` (UTC instants, end exclusive, serialized `…Z` with whole seconds), `all_day`, `start_date` / `end_date` (calendar dates `YYYY-MM-DD`, end exclusive, set only for all-day events, otherwise `None`; computed in the adapter), `time_zone` (informational only). For all-day and floating events, the UTC `start`/`end` instants reflect the Mac's system time zone at query time; consumers should use `start_date`/`end_date` for all-day events.
   - State: `status`, `is_recurring` (`hasRecurrenceRules or isDetached`), `is_detached`, `occurrence_start`.
   - People and calendar: `organizer: Participant | None`, `attendees: tuple[Participant, ...]`, `self_status: ParticipationStatus | None`, `calendar: CalendarRef`.
 
-  Nullability is decided up front, because R18 forbids retyping later. `title`, `event_identifier`, `time_zone`, `external_id`, `location`, `url` and `notes` are nullable. `time_zone` is "IANA name when available, otherwise EventKit's raw zone name, `None` for floating". `occurrence_start` falls back to `start` when `occurrenceDate` is nil.
+  Nullability is decided up front, because R18 forbids retyping later. `title`, `event_identifier`, `time_zone`, `external_id`, `location`, `url`, `notes`, `start_date` and `end_date` are nullable. `time_zone` is "IANA name when available, otherwise EventKit's raw zone name, `None` for floating". `occurrence_start` falls back to `start` when `occurrenceDate` is nil.
 - R4. `Participant`:
   - `name | None`, `email | None`, `url | None`, `role`, `status`, `type` (person/room/resource/group/unknown), `is_self` (`EKParticipant.isCurrentUser`).
   - `email` follows RFC 6068 parsing: scheme compared case-insensitively, `?query` stripped, percent-decoded, first address when several are comma-separated, `None` when empty. `url` is the raw URL **only when it is not `mailto:`**, otherwise `None`.
@@ -52,12 +52,13 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Any selector that matches nothing raises `CalendarNotFoundError` listing available titles, even when other selectors match.
   - `calendars=[]` raises `ValueError`. `None` means all calendars. The filter is **never** silently ignored.
 - R7. CLI commands:
-  - `macos-calendar-events window --start ISO --end ISO [--calendar X ...] [--pad-minutes N] [--include-notes] [prompt flag per Pending decision D4]`
-  - `macos-calendar-events calendars [prompt flag per D4]`
+  - `macos-calendar-events window --start UTC --end UTC [--calendar X ...] [--pad-minutes N] [--include-notes] [--prompt]`
+  - `macos-calendar-events calendars [--prompt]`
+  - The CLI **never prompts for Calendar access unless `--prompt` is passed**. There is no `--no-prompt` flag. Without `--prompt`, a `not_determined` status exits 3 immediately. The README tells users to grant access once by running `macos-calendar-events calendars --prompt` from Terminal.
   - `macos-calendar-events --version`, which prints `macos-calendar-events <version> (schema_version 1)`.
 
   Output is JSON on stdout, diagnostics go to stderr, and exit codes are documented (R11). **The CLI is the primary, documented integration surface** (R18). The Python API (R1, R2, R9) stays public but secondary, for tests and in-process users.
-- R8. Output is deterministic: events sorted by `(start instant, end instant, calendar.id, id)`. Sorting is by UTC instant, never by string.
+- R8. Output is deterministic: events sorted by `(start, end, calendar.id, id)`, all UTC.
 
 ### Permissions (TCC)
 - R9. Access API:
@@ -66,7 +67,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Reads gate on access: `full_access` passes; `not_determined` with `prompt=True` requests once, then re-checks; anything else, including still `not_determined` after the request, raises `CalendarAccessError(status)`.
   - Remediation text is generic: "grant Calendar access to the app that launched this process (for example Terminal, iTerm2, VS Code) in System Settings → Privacy & Security → Calendars". The package doesn't try to detect the responsible app. `write_only` counts as denied for reads.
 - R10. No writes, ever. Enforced by `scripts/check_readonly.sh` in CI:
-  - `grep -rnE` over `src/` for a denylist: `saveEvent|removeEvent|saveCalendar|removeCalendar|saveReminder|removeReminder|commit_?\(|requestWriteOnlyAccess|requestAccessToEntityType`, plus `\.reset\(` pending decision D7.
+  - `grep -rnE` over `src/` for a denylist: `saveEvent|removeEvent|saveCalendar|removeCalendar|saveReminder|removeReminder|commit_?\(|requestWriteOnlyAccess|requestAccessToEntityType`, plus `\.reset\(`. `reset` is never called (store lifetime rule, Phase 4).
   - Grep's exit code is interpreted strictly: `1` (no match) is a pass, `0` (match) is a fail, and anything else (for example `2` for an unreadable path) is a fail.
   - An **allowlist**: the set of PyObjC selector calls with arguments in `_eventkit.py` (identifiers ending in `_(`) must equal `scripts/eventkit_selectors.allow`.
   - The script is itself tested (Phase 1).
@@ -81,8 +82,18 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - `5` calendar selector not found.
 
   Exits 1, 3, 4 and 5 print exactly one stderr line. Every non-zero exit leaves stdout empty, because stdout is written once, after serialization succeeds. A process killed by a signal (for example a TCC refusal, if Phase 0 observes one) is outside the CLI's control. Consumers treat it like any other failure.
-- R12. The library API rejects naive datetimes (`ValueError`). The CLI parses ISO 8601 (`Z` or offset accepted), treats a naive value as **local time**, and says so in `--help`. `end <= start` → `ValueError` / exit 2.
-- R13. Window span cap: EventKit's `predicateForEventsWithStartDate:endDate:calendars:` only matches events within a four-year span, so over-cap windows raise `ValueError` (CLI exit 2) instead of being silently truncated. The cap is measured on the caller's window **after** `--pad-minutes` padding. The exact limit and whether the adapter widens the queried range depend on Pending decision D6. No chunking in v0.1.
+- R12. **UTC at the contract boundary, input and output.**
+  - **CLI:** `--start`/`--end` must be ISO 8601 UTC, written with `Z` or `+00:00`. Naive values and any non-zero offset exit `2` with a one-line message (e.g. `--start must be UTC (end with Z or +00:00)`). This supersedes the earlier "naive = local" rule.
+  - **Python API:** `start`/`end` must be timezone-aware with `utcoffset() == timedelta(0)`. Naive or non-zero-offset datetimes raise `ValueError`, for symmetry with the CLI; there is no silent normalization.
+  - **Output:** every instant (`start`, `end`, `occurrence_start`, echoed window) is UTC `…Z` with whole seconds.
+  - **Consumer's job:** koda converts its session times to UTC before calling. The library never needs the consumer's time zone, and local-time presentation is the consumer's concern.
+  - `end <= start` → `ValueError` / exit 2.
+- R13. Window span cap: EventKit's `predicateForEventsWithStartDate:endDate:calendars:` only matches events within a four-year span, so over-cap windows raise `ValueError` (CLI exit 2) instead of being silently truncated. The details:
+  - **Limit:** the caller's window, measured **after** `--pad-minutes` padding, may be at most **4×365 − 2 days** long.
+  - **Widening:** the adapter always queries **±1 day** beyond that padded window, so the queried range stays within EventKit's 4-year span, and the Python overlap filter trims the result back to the window. This is needed because all-day and floating events are date-anchored, so DST and time-zone shifts can move them by up to a day relative to a UTC window.
+  - **Length, not age:** the cap limits window **length** only. Windows may be arbitrarily far in the past, for example a crashed cron job reprocessing a week- or month-old session with its absolute UTC times.
+
+  No chunking in v0.1.
 - R14. `import macos_calendar_events` succeeds on non-macOS and without PyObjC. EventKit is imported lazily, and only `_eventkit.py` imports `EventKit`/`Foundation`/`AppKit`/`objc` (enforced by `scripts/check_readonly.sh`).
 
 ### Packaging and quality
@@ -106,9 +117,9 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 - R18. **CLI JSON contract.**
   - **Schemas:** the stdout of `window` and `calendars` is specified by JSON Schemas shipped as **package data**: `src/macos_calendar_events/schema/window-v1.schema.json` and `calendars-v1.schema.json`, loaded via `importlib.resources`, so installed consumers and tests read the same files. Each schema declares `$schema: https://json-schema.org/draft/2020-12/schema`, a stable `$id` (`https://github.com/vr000m/macos-calendar-events/schema/<name>-v1.json`) and `schema_version: {const: 1}`.
   - **Serialization:** UTF-8 with `ensure_ascii=False`, `sort_keys=True`, `indent=2` and a trailing newline. Datetimes are RFC 3339 with whole seconds (`timespec="seconds"`); raw timestamps are truncated to whole seconds at the `Raw*` boundary.
-  - **Stability rules within v1:** fields may be **added** (consumers must ignore unknown keys), but none are removed, renamed, retyped, or changed in meaning. Whether a **new enum value** is additive depends on Pending decision D3. Any breaking change bumps `schema_version` to 2 with new schema files.
-  - **Enforcement:** contract tests (Phase 5) validate CLI output against the schemas, with format checking on, and compare it byte for byte with golden files `tests/golden/window-v1.json` and `tests/golden/calendars-v1.json`. How goldens are produced is Pending decision D8.
-  - **Documented consumer rule (README):** call the CLI by absolute path with a timeout (suggested 10 s), and treat any non-zero exit, signal, timeout, missing executable, or JSON/schema/`schema_version` mismatch as "no calendar hints". Never treat it as fatal for the consumer's own pipeline. The supported install and locate path is Pending decision D9.
+  - **Stability rules within v1:** fields may be **added** (consumers must ignore unknown keys), but none are removed, renamed, retyped, or changed in meaning. **Enums are open within v1:** a new enum value is an additive change. Schema enum fields are `type: string` with their known values listed in an `x-known-values` annotation and the field `description`, and consumers map unknown values to `unknown`. Any breaking change bumps `schema_version` to 2 with new schema files.
+  - **Enforcement:** contract tests (Phase 5) validate CLI output against the schemas, with format checking on, and compare it byte for byte with golden files `tests/golden/window-v1.json` and `tests/golden/calendars-v1.json`. Goldens are the **single stated exception** to "expected values never come from running the code". They are change detectors generated by `scripts/regen_goldens.py`, hand-reviewed before commit, and any golden change needs a `CHANGELOG.md` line. Phase 2's hand-written expected values remain the independent correctness check.
+  - **Documented consumer rule (README):** call the CLI by absolute path with a timeout (suggested 10 s), and treat any non-zero exit, signal, timeout, missing executable, or JSON/schema/`schema_version` mismatch as "no calendar hints". Never treat it as fatal for the consumer's own pipeline. **Install and locate:** the supported install is `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0` (a pinned tag), which puts the CLI in `~/.local/bin`. A launchd agent's PATH doesn't include `~/.local/bin`, so consumers invoke the CLI by absolute path. koda reads it from config/env (e.g. `KODA_CALENDAR_CLI`, default `~/.local/bin/macos-calendar-events`) and treats `FileNotFoundError` as "no hints".
   - **Performance:** a cold-process startup of ~100–200 ms (Python + PyObjC import) per call is acceptable. Startup optimization is out of scope.
 - R19. **macOS 14 (Sonoma) or newer only.** `default_source()` gates on feature detection, `EKEventStore.instancesRespondToSelector_("requestFullAccessToEventsWithCompletion:")`, rather than parsing `platform.mac_ver()`. If the selector is missing, it raises `EventKitUnavailableError` (CLI exit `4`), quoting `platform.mac_ver()[0]` in the message for information only. There are no code paths for older macOS.
 
@@ -121,9 +132,10 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 - Detecting calendars that are *hidden* (unchecked) in Calendar.app. EventKit doesn't expose that view state, so hidden-but-subscribed calendars are returned. This is documented, and the `calendars` filter is the workaround.
 - Delegate calendars, if Phase 0 shows the default store excludes them (documented limitation; `initWithSources:` is a follow-up).
 - Detecting which app TCC attributes a request to (remediation text is generic, R9).
+- Converting to or presenting local time (the consumer's concern; R12).
 - Windows over the R13 cap, Python < 3.11, macOS < 14 (R19), publishing to PyPI (release is a follow-up plan).
 - Optimizing CLI startup latency or running a resident server/daemon for consumers (R18 accepts ~100–200 ms per call).
-- Merging duplicate rows when one invite appears in several calendars. Rows stay separate. The consumer dedupe key is Pending decision D5.
+- Merging duplicate rows when one invite appears in several calendars. Rows stay separate; consumers dedupe on `(external_id, occurrence_start)` when `external_id` is non-null (R3).
 
 ## Review Focus
 
@@ -137,7 +149,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Whether a store created before the grant returns data after it.
 - **TCC attribution:** a CLI run from Terminal is attributed to the *responsible app* (Terminal, iTerm2, VS Code; cron or launchd → none). Because koda runs the CLI as a **subprocess**, attribution follows koda's own responsible process: a Terminal-launched koda, or a launchd agent with no app. The prompt needs `NSCalendarsFullAccessUsageDescription` in the responsible app's Info.plist. **This is the highest risk and is de-risked in Phase 0 before any design is frozen.**
 - **Completion-handler threading:** the completion block fires on an arbitrary queue. `_access.wait_for_access` blocks on `threading.Event` with a timeout; Phase 0 decides whether an `NSRunLoop` must be pumped.
-- **Time:** RFC 3339 output with whole seconds; DST transitions; floating (no-tz) events; all-day end exclusivity; non-IANA zone names such as `GMT+0530`.
+- **Time:** UTC-only input and output (R12); RFC 3339 `…Z` with whole seconds; DST transitions; floating (no-tz) events; all-day `start_date`/`end_date` exclusivity; ±1-day query widening (R13); `time_zone` passed through as informational, including non-IANA names such as `GMT+0530`.
 - **Cross-repo contract:** JSON Schema draft 2020-12 with format checking, additive-only evolution within `schema_version` 1.
 - **Formats:** RFC 6068 (`mailto:`), RFC 3986 scheme case-insensitivity, RFC 2606 fixture domains.
 - **Overlap semantics** at boundaries, including zero-duration events.
@@ -176,11 +188,11 @@ sequenceDiagram
     participant S as EventKitSource
     participant T as tccd / calendaragent
     participant M as _mapping
-    K->>C: spawn `window --start --end --pad-minutes 15 [prompt flag per D4]` (timeout)
+    K->>C: spawn `window --start <UTC> --end <UTC> --pad-minutes 15` (no --prompt; timeout)
     C->>D: default_source()
     D-->>C: EventKitUnavailableError → exit 4 (if no EventKit / macOS < 14)
     C->>A: query_events(source, start, end, calendars, include_notes, prompt)
-    A->>M: validate_window(start, end)  (ValueError on naive / inverted / over cap → exit 2)
+    A->>M: validate_window(start, end)  (ValueError on naive / non-UTC / inverted / over cap → exit 2)
     A->>S: authorization_status() (raw int)
     A->>M: access_status_from_int(int)
     alt not_determined and prompt
@@ -191,7 +203,7 @@ sequenceDiagram
     A-->>C: CalendarAccessError if not full_access → exit 3
     A->>S: calendars()
     A->>M: select_calendars(raw_calendars, selectors)  (CalendarNotFoundError → exit 5)
-    A->>S: events(query_start, query_end, calendar_ids)  (range per D6)
+    A->>S: events(padded_start − 1 day, padded_end + 1 day, calendar_ids)
     S-->>A: list[RawEvent]  (plain Python, no ObjC objects)
     A->>M: to_events(raw, window, include_notes)  (map, overlap filter, sort)
     M-->>A: list[Event]
@@ -219,15 +231,15 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 - **Permissions:** from Terminal.app and from the user's usual terminal or VS Code, check `authorizationStatusForEntityType_`, call `requestFullAccessToEventsWithCompletion_`, and record whether a prompt appears, which app it names, and the resulting status. Record if the process is killed instead of returning a status.
 - **Subprocess attribution (koda's path):** run the spike as a *child process* (a) of a Python parent started from Terminal and (b) of a parent started by a user `launchd` agent (`launchctl bootstrap gui/$UID` with a temporary plist the user loads and unloads). For each, record attribution, whether a prompt can appear, the resulting status, and whether a grant made from Terminal carries over.
 - **Run loop:** confirm whether `threading.Event.wait(timeout)` receives the completion without an `NSRunLoop`; if not, record that `NSRunLoop.currentRunLoop().runUntilDate_` slices are required.
-- **Store lifetime:** after a first-time grant (on a reset grant, done by the user), compare calendar and event counts from the store created before the grant with those from a fresh store (input to D7).
-- **Predicate edges:** over a real window, compare counts for events ending exactly at, starting exactly at, and zero-length on the window edges between a narrow query and a widened-then-filtered query (input to D6).
+- **Store lifetime:** after a first-time grant (on a reset grant, done by the user), compare calendar and event counts from the store created before the grant with those from a fresh store (input to the store-lifetime rule; Phase 0 may relax it to a single store).
+- **Predicate edges:** over a real window, compare counts for events ending exactly at, starting exactly at, and zero-length on the window edges between a narrow query and a widened-then-filtered query (informational: the adapter widens by ±1 day regardless, R13).
 - **Shapes over a real ±7-day window** (counts only):
   - nil counts for `calendarItemExternalIdentifier`, `title`, `eventIdentifier`, `occurrenceDate`, `timeZone`, source title;
   - `timeZone` names that `zoneinfo.ZoneInfo` rejects;
   - whether recurring occurrences share the external id;
   - whether the same invite in two calendars shares an external id, reported explicitly as "observed / not observed";
   - participant URL scheme distribution;
-  - all-day `startDate`/`endDate` representation;
+  - all-day `startDate`/`endDate` representation, and the local calendar dates the adapter would derive for `start_date`/`end_date`;
   - `participantType` values;
   - a `hasRecurrenceRules` × `isDetached` cross-tab, and `occurrenceDate` vs `startDate` on detached events;
   - per source type, how many events have 0, 1 or more `isCurrentUser` attendees, and whether the organizer repeats in `attendees`;
@@ -238,12 +250,12 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
   - every bullet above has a recorded result in `## Findings` (Phase 0);
   - each design consequence is written into `## Decisions` (as `Decision (Phase 0): …`);
   - if any consequence changes the contract above the marker, the plan is updated via `/dev-plan update` and `/review-plan` re-runs before Phase 1;
-  - the architecture-reopen criteria in Pending decision D1 are checked explicitly.
+  - the architecture-reopen criteria are checked explicitly. **Stop and re-plan the CLI-subprocess architecture only if** (a) the CLI launched under a launchd-started parent can't reach `full_access` by any documented user step (granting from Terminal, or adding the binary in Privacy settings), or (b) the permission completion callback never fires even with the run loop pumped. Every other Phase 0 result updates Phases 2–4 via `/dev-plan update`, followed by a fresh `/review-plan`.
 - Commit the spike with its findings (so history keeps it). It is deleted in Phase 1.
 
 ### Phase 1: Scaffold, tooling, CI
 
-**Impl files:** `pyproject.toml, uv.lock, README.md, src/macos_calendar_events/__init__.py, src/macos_calendar_events/py.typed, src/macos_calendar_events/_eventkit.py, .github/workflows/ci.yml, scripts/check_readonly.sh, scripts/eventkit_selectors.allow, scripts/check_privacy.sh`
+**Impl files:** `pyproject.toml, uv.lock, README.md, CHANGELOG.md, src/macos_calendar_events/__init__.py, src/macos_calendar_events/py.typed, src/macos_calendar_events/_eventkit.py, .github/workflows/ci.yml, scripts/check_readonly.sh, scripts/eventkit_selectors.allow, scripts/check_privacy.sh`
 **Test files:** `tests/test_import.py, tests/test_check_scripts.py`
 **Test command:** `uv run pytest tests/test_import.py tests/test_check_scripts.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
 **Validation cmd:** `git push -u origin feature/core-events-api && gh run watch --exit-status` (user-run; pushing is the user's call)
@@ -259,6 +271,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
   - ruff config: target py311, `select = ["E","F","I","B","UP","SIM","RUF"]`.
   - mypy: `strict = true`, `files = ["src", "tests"]`, override `ignore_missing_imports` for `EventKit`, `Foundation`, `AppKit`, `objc`.
   - pytest: `markers = ["live: touches the real macOS calendar; opt-in"]`. `uv.lock` committed.
+- `CHANGELOG.md` stub (an `Unreleased` section), so golden changes in Phase 5 have somewhere to be logged.
 - `_eventkit.py` starts as a three-line stub (lazy `import EventKit` inside a function) so the strict-mypy + PyObjC-as-`Any` assumption is proven now, not in Phase 4.
 - `tests/test_import.py` (fresh subprocess via `sys.executable -c`, so the result doesn't depend on test order):
   - with `sys.modules['EventKit'] = sys.modules['Foundation'] = sys.modules['objc'] = None`, `import macos_calendar_events` succeeds and exposes `__version__`;
@@ -268,7 +281,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 - `tests/test_check_scripts.py` copies each script into a temp tree and runs it:
   - clean tree → exit 0;
   - seeded `store.saveEvent_span_error_(e, 0, None)` → non-zero;
-  - seeded `store.reset()` → non-zero (pending D7);
+  - seeded `store.reset()` → non-zero;
   - a selector missing from the allowlist → non-zero;
   - `src/` missing → non-zero (proves the exit-2 path fails);
   - seeded `real@Corp.COM` → `check_privacy.sh` exits 1;
@@ -285,7 +298,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 - Frozen, slotted dataclasses and `StrEnum`s per the type sketch. Collections are tuples.
 - `models.py` owns `SCHEMA_VERSION = 1`, `window_to_json(events, *, window) -> str` and `calendars_to_json(calendars) -> str`, both using the R18 serialization rules (sort_keys, indent 2, `ensure_ascii=False`, trailing newline, `timespec="seconds"`). Keys are always present, with `None` as `null`.
 - Errors: base `MacosCalendarEventsError`; `CalendarAccessError(status: AccessStatus)`, `CalendarNotFoundError(selectors, available_titles)`, `EventKitUnavailableError`.
-- Write both JSON Schemas by hand from the type sketch: `$schema`, `$id`, `schema_version: {const: 1}`, required keys, types, nullability per R3, `color_hex` pattern `^#[0-9A-F]{6}$`, `date-time` formats, `additionalProperties: true`. Enum representation per Pending decision D3.
+- Write both JSON Schemas by hand from the type sketch: `$schema`, `$id`, `schema_version: {const: 1}`, required keys, types, nullability per R3, `color_hex` pattern `^#[0-9A-F]{6}$`, `date-time` formats, `additionalProperties: true`. Enum fields are open: `type: string` plus `x-known-values: [...]` and a `description` listing the values (R18). `start_date`/`end_date` use `format: date`, and every instant uses `format: date-time` with a `pattern` requiring a `Z` suffix.
 - `tests/test_models.py`:
   - hand-written expected dicts derived from the spec (not from calling the code);
   - a non-ASCII title serializes unescaped;
@@ -298,7 +311,8 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
   - negatives: missing required key, wrong type, naive datetime string, `not-a-date`, `schema_version: 2`;
   - positive: an extra unknown key validates;
   - each schema's `required` equals the dataclass field names for `Event`, `Participant`, `CalendarRef` and `CalendarInfo`;
-  - enum checks per D3.
+  - every StrEnum's values equal the `x-known-values` of its schema field (every value documented, nothing stale), and a document with an unknown enum string still validates;
+  - an instant with `+02:00` instead of `Z` fails validation.
 
 ### Phase 3: Pure core (mapping, access gate, window, selection) against a fake source
 
@@ -316,9 +330,9 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 - Named fixture-driven tests, each asserting observable output:
   - **overlap:** event ends exactly at window start → excluded; starts exactly at window end → excluded; spans the whole window → included; zero-duration at window start → included, at window end → excluded.
   - **recurring:** two occurrences of one series → distinct `id`, same `event_identifier`, same `external_id`, `is_recurring=True`; a detached occurrence keeps the id derived from its original `occurrence_start`; nil `occurrenceDate` → `occurrence_start == start`.
-  - **all-day:** single-day and three-day all-day events at both window edges; `all_day=True`; end exclusive (normalized per Phase 0); `time_zone=None`.
+  - **all-day:** single-day and three-day all-day events at both window edges; `all_day=True`; `start_date`/`end_date` passed through from the raw record with an exclusive end; `time_zone=None`; timed events have `start_date is None`.
   - **floating:** a timed event with `time_zone=None`.
-  - **DST:** an event across the US spring-forward and fall-back boundaries keeps correct UTC instants; offset per D2.
+  - **DST:** an event across the US spring-forward and fall-back boundaries keeps correct UTC instants, serialized with `Z`; `time_zone` passed through unchanged.
   - **declined:** self attendee `declined` → returned with `self_status == DECLINED`; canceled → `status == CANCELED`.
   - **self rows:** zero `is_self` attendees → `self_status is None`; two → the first in order wins.
   - **attendees:** non-mailto URL → `email=None`, `url` kept; mailto → `url is None`; no name → `name=None`; organizer-only → `attendees == ()`; room → `type == ROOM`.
@@ -328,13 +342,15 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
   - **enum tables (`tests/test_enum_tables.py`):** every known int per table plus one unknown int → `UNKNOWN`; authorization ints 0–4 plus unknown. A darwin-only, non-live test (`skipif(sys.platform != "darwin")`; constants need no TCC grant) asserts table keys equal `EventKit.EKParticipantStatusAccepted` and its peers, `EKAuthorizationStatusFullAccess`, `EKSourceTypeExchange`, and so on.
   - **calendars (R2):** each `CalendarInfo` field from a raw calendar; `read_only=True` calendar; `color_rgb=None` → `color_hex=None`; `(0.0, 0.5, 1.0)` → `#0080FF`; unknown source-type int → `unknown`; calendar ordering.
   - **selection (R6):** id match; case-insensitive title match; duplicate titles across sources both selected; a selector equal to one calendar's id and another's title selects by id only; one valid + one unknown selector → `CalendarNotFoundError`; `calendars=[]` → `ValueError`; `None` → all.
-  - **window validation:** naive → `ValueError`; `end <= start` → `ValueError`; cap boundary per R13 (the exact value passes, one second more raises; numbers per D6).
+  - **window validation:** naive → `ValueError`; `end <= start` → `ValueError`; non-UTC aware datetime (`+05:30`) → `ValueError`; a window of exactly 4×365 − 2 days passes and one second more raises; a multi-week window (6 weeks) passes; an old absolute window (`2025-01-06T17:00:00Z`–`2025-01-06T18:00:00Z`) passes and returns its fixture events.
+  - **query widening:** `FakeSource` records the range it was asked for, which equals the padded window ±1 day (an effect on the outside system); an all-day event whose UTC instants fall just outside the window but within the widened range is fetched, then included or excluded strictly by `overlaps`.
   - **access gate (`tests/test_access.py`):**
     - each `AccessStatus` from the fake: only `full_access` proceeds; `not_determined` + `prompt=False` raises with zero recorded requests;
     - `not_determined` + `prompt=True` records exactly one request, then: granted → proceeds; denied → raises `CalendarAccessError(DENIED)`; still `not_determined` → raises `CalendarAccessError(NOT_DETERMINED)`;
     - `wait_for_access` with a requester that calls back `True` from another thread → returns the post-grant status; calls back `False` → returns denied status; never calls back → returns the current status after `timeout` (elapsed < timeout + 0.5 s).
+  - **raw dates:** `RawEvent.start_date`/`end_date` (adapter-computed `date | None`) carry straight through to output.
   - **empty:** zero events → `[]`; `include_notes=False` → `notes is None` even when raw notes exist.
-  - **ordering (R8):** fixtures that tie at each sort-key level, including starts with mixed offsets whose instant order differs from string order, assert a hand-written expected order.
+  - **ordering (R8):** fixtures that tie at each sort-key level assert a hand-written expected order.
 
 ### Phase 4: EventKit adapter, platform gate and public API wiring
 
@@ -346,19 +362,20 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 
 - `EventKitSource(store_factory=…)` implements `EventSource`:
   - the default factory builds a real `EKEventStore`; tests inject a stub;
-  - store lifetime and post-grant behavior per Pending decision D7;
+  - **store lifetime:** the store is created lazily on first use; after a `request_access` that returns `full_access`, the source discards it and builds a fresh store; `reset` is never called (Phase 0 may relax this to a single store if before/after counts match);
   - `authorization_status()` returns the raw int;
   - `request_access(timeout)` calls `_access.wait_for_access` with `store.requestFullAccessToEventsWithCompletion_`, using the run-loop strategy from Phase 0;
   - `calendars()` uses `calendarsForEntityType_(EKEntityTypeEvent)`, with NSColor → sRGB via `colorUsingColorSpace_(NSColorSpace.sRGBColorSpace())`, `None` on failure;
-  - `events(start, end, calendar_ids)` resolves ids via `calendarWithIdentifier_` and queries the predicate, with `calendars=None` meaning all and the queried range per D6.
-- NSDate ↔ datetime via `timeIntervalSince1970` (truncated to whole seconds, UTC-aware). The `NSTimeZone.name()` string is passed through raw, and its interpretation is per D2. Nil → `None`. Participant URL → `absoluteString()`.
-- `default_source()`: cached per process per D7. Raises `EventKitUnavailableError` on non-darwin, `ImportError`, or the missing 14+ selector (R19).
+  - `events(start, end, calendar_ids)` resolves ids via `calendarWithIdentifier_` and queries the predicate, with `calendars=None` meaning all, over the padded window ±1 day (R13).
+- NSDate ↔ datetime via `timeIntervalSince1970` (truncated to whole seconds, UTC-aware). The `NSTimeZone.name()` string is passed through raw as informational `time_zone`. For all-day events, the adapter computes `start_date`/`end_date` (exclusive end) from the event's dates via `NSCalendar.currentCalendar()` components, normalizing an inclusive `23:59:59` end to the next day per Phase 0 findings. Nil → `None`. Participant URL → `absoluteString()`.
+- `default_source()`: one cached `EventKitSource` per process (`_clear_default_source()` for tests). Raises `EventKitUnavailableError` on non-darwin, `ImportError`, or the missing 14+ selector (R19).
 - `__init__.py`: wire `events_in_window`, `list_calendars`, `authorization_status`, `request_access` as thin wrappers over `_api` / `default_source()`, plus re-exports of models, errors and `__version__`.
 - `scripts/eventkit_selectors.allow`: the exact selector set used.
 - `tests/test_eventkit_adapter.py` (stub store; runs where `objc` is absent by stubbing the factory, and NSDate conversion tests are darwin-only):
   - `request_access` with a stub that never calls back returns the current status within the timeout;
   - calendar-id resolution passes only the selected stub calendars to the predicate;
-  - an unknown id is skipped (selection already validated).
+  - an unknown id is skipped (selection already validated);
+  - after a stub `request_access` returns full access, the next read uses a newly built stub store (factory called twice); after denial, no new store is built.
 - `tests/test_platform_guard.py`: a stub store class without the 14+ selector → `EventKitUnavailableError` whose message includes the version string; with the selector → a source; non-darwin (monkeypatched `sys.platform`) → `EventKitUnavailableError`; blocked `EventKit` import → `EventKitUnavailableError`.
 - Live smoke (`@pytest.mark.live`, skipped unless `MACOS_CALENDAR_EVENTS_LIVE=1` **and** darwin), over now ± 7 days: compute violation **counts** (non-aware datetimes, `start > end`, non-overlapping rows, empty ids, duplicate ids, JSON or schema failures) and assert each equals 0; `len(list_calendars()) > 0`. Print only counts.
 
@@ -367,14 +384,14 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 **Impl files:** `src/macos_calendar_events/cli.py, scripts/validate_json.py, scripts/regen_goldens.py`
 **Test files:** `tests/test_cli.py, tests/test_cli_contract.py, tests/test_validate_json.py, tests/golden/window-v1.json, tests/golden/calendars-v1.json`
 **Test command:** `uv run pytest tests/test_cli.py tests/test_cli_contract.py tests/test_validate_json.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
-**Validation cmd:** (after the live preflight) `uv run macos-calendar-events calendars | uv run python scripts/validate_json.py calendars-v1 && uv run macos-calendar-events window --start "$(date -v-1d +%Y-%m-%dT%H:%M)" --end "$(date -v+1d +%Y-%m-%dT%H:%M)" | uv run python scripts/validate_json.py window-v1`
-**Goal:** The CLI is a thin shell and the stable cross-repo contract: parse → `_api` → serialize → map exceptions to exit codes (R11). Its stdout always validates against the v1 schemas (R18). It has no logic of its own beyond padding and naive-time interpretation.
+**Validation cmd:** (after the live preflight) `uv run macos-calendar-events calendars | uv run python scripts/validate_json.py calendars-v1 && uv run macos-calendar-events window --start "$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)" --end "$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)" | uv run python scripts/validate_json.py window-v1`
+**Goal:** The CLI is a thin shell and the stable cross-repo contract: parse → `_api` → serialize → map exceptions to exit codes (R11). Its stdout always validates against the v1 schemas (R18). It has no logic of its own beyond padding and UTC input validation.
 
 - `main(argv: Sequence[str] | None = None, *, source: EventSource | None = None) -> int` calls `_api.query_events(source or default_source(), …)`. `source` is the test seam and isn't a CLI flag. The module ends with `if __name__ == "__main__": sys.exit(main())`.
 - A catch-all handler maps unexpected exceptions to exit 1 with a one-line class-only message. stdout is written once, as UTF-8 bytes to `sys.stdout.buffer`, after serialization succeeds.
-- `window`: `--start`, `--end` (ISO 8601; naive = local), `--calendar` (repeatable), `--pad-minutes N` (int ≥ 0, widens both ends before cap validation), `--include-notes`, and the prompt flag per D4. Output: `window_to_json` with the padded window echoed. `calendars`: `calendars_to_json`. `--version`.
+- `window`: `--start`, `--end` (ISO 8601 UTC only: `Z` or `+00:00`, R12), `--calendar` (repeatable), `--pad-minutes N` (int ≥ 0, widens both ends before cap validation), `--include-notes`, `--prompt`. Output: `window_to_json` with the padded window echoed. `calendars`: `calendars_to_json`. `--version`.
 - `scripts/validate_json.py <schema-name>`: loads the packaged schema, validates stdin with the format checker, prints only the JSON path and keyword on failure, and exits non-zero. `tests/test_validate_json.py` feeds an invalid document containing a sentinel string and asserts the sentinel is absent from output.
-- `scripts/regen_goldens.py` writes `tests/golden/*.json` from fixed fake fixtures (which include a non-ASCII title). The policy for generated vs hand-checked goldens is per D8.
+- `scripts/regen_goldens.py` writes `tests/golden/*.json` from fixed fake fixtures (which include a non-ASCII title). Workflow: run `uv run python scripts/regen_goldens.py`, hand-review the diff against Phase 2's hand-written expected values and the spec, add a `CHANGELOG.md` line, then commit (R18).
 - `tests/test_cli_contract.py` (R18):
   - `main([...], source=FakeSource(fixed fixtures))` stdout validates against the schema and equals the golden file byte for byte;
   - every error exit leaves stdout empty;
@@ -384,12 +401,13 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
   - `--pad-minutes 15` includes an event 10 min before `--start`; `--pad-minutes -1` → exit 2; padding that pushes the window over the cap → exit 2;
   - `--include-notes` emits notes, and its absence emits `null`;
   - two `--calendar` flags restrict output; an unknown `--calendar` → exit 5;
-  - prompt-flag wiring per D4, with `FakeSource` at `not_determined`: the non-prompting form exits 3 with **zero** recorded requests for both `window` and `calendars`; the prompting form records exactly one;
+  - prompt wiring, with `FakeSource` at `not_determined`: without `--prompt`, both `window` and `calendars` exit 3 with **zero** recorded requests; with `--prompt`, exactly one request is recorded; `--no-prompt` is rejected by argparse (exit 2);
   - each error class → its exit code, with one stderr line for 1/3/4/5 (argparse exits use `pytest.raises(SystemExit)`);
   - `end <= start` → 2;
-  - naive input is interpreted as local time (an autouse fixture pins `TZ=America/Los_Angeles` via `time.tzset`).
+  - UTC input (R12): `Z` and `+00:00` are accepted; a naive value and `+05:30` each exit 2 with the one-line UTC message and empty stdout; output instants all end in `Z`;
+  - an old absolute window (`--start 2025-01-06T17:00:00Z --end 2025-01-06T18:00:00Z`) and a 6-week window both exit 0 with the fixture events.
 - **Manual validation (user-run, last in this phase):**
-  - from a user launchd agent, run the installed CLI by absolute path with the non-prompting form; record exit code and status;
+  - from a user launchd agent, run the installed CLI by absolute path (no `--prompt`); record exit code and status;
   - then `tccutil reset Calendar <terminal-bundle-id>`, followed by `uv run python -c "import macos_calendar_events as m; print(m.request_access())"`; record prompt, grant and deny behavior;
   - re-grant before marking the phase done.
 
@@ -398,19 +416,20 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight:
 **Impl files:** `README.md, CHANGELOG.md`
 **Test files:** (none)
 **Test command:** `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
-**Validation cmd:** `uv build && uvx --from dist/*.whl macos-calendar-events --version`
+**Validation cmd:** `uv build && uvx --from dist/*.whl macos-calendar-events --version && uv tool install --force . && ~/.local/bin/macos-calendar-events --version`
 **Goal:** A stranger can install it, grant permission, and run it from the README alone. Every README command except `tccutil reset` is executed verbatim on the Mac before this phase is marked done. The reset command is exempt because it revokes the grant the live checks need.
 
 - README sections:
   - what/why (consumer use case in one paragraph, ranking explicitly out of scope);
   - **requirements: macOS 14 Sonoma+**;
-  - install, per D9;
-  - permission walkthrough: the generic responsible-app explanation, the System Settings path, the prompt flag per D4, and how to reset during development with `tccutil reset Calendar <bundle-id>` (run by the user, never by the tool);
-  - **"Integrating from another program" (primary):** absolute-path subprocess call with a timeout, the R18 stability rules and the "any failure = no hints" rule, a link to the packaged schemas, the dedupe key per D5, and the fact that `id` is opaque;
+  - install: `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0`, with the CLI landing in `~/.local/bin`, and a note that launchd's PATH lacks `~/.local/bin`, so callers should use the absolute path;
+  - permission walkthrough: the generic responsible-app explanation, the System Settings path, the one-time grant via `macos-calendar-events calendars --prompt` run from Terminal, and how to reset during development with `tccutil reset Calendar <bundle-id>` (run by the user, never by the tool);
+  - **"Integrating from another program" (primary):** absolute-path subprocess call with a timeout, the R18 stability rules and the "any failure = no hints" rule, a link to the packaged schemas, UTC-only input (convert session times to UTC before calling), the dedupe key `(external_id, occurrence_start)` when `external_id` is non-null (provisional per Phase 0), and the fact that `id` is opaque;
   - CLI examples; Python API example (secondary); exit codes (R11, including 1);
   - known limitations: hidden calendars, delegate calendars if applicable, the R13 cap, external-id caveats, floating times, non-IANA zone names;
   - privacy note; BSD-2-Clause.
-- A short consumer snippet: `subprocess.run([CLI_PATH, "window", "--start", t0, "--end", t1, "--pad-minutes", "15", …], capture_output=True, timeout=10)`, with `FileNotFoundError`/`TimeoutExpired`/non-zero/`json.JSONDecodeError` all mapped to "no hints", then a `schema_version` check, dedupe per D5, and reconcile in your own code.
+- The `v0.1.0` tag that the install command pins is created by the user on `main` after merge (user-run; pushing a tag is the user's call). Until then, README examples are validated with `uv tool install --force .` from the checkout.
+- A short consumer snippet: `CLI_PATH = os.environ.get("KODA_CALENDAR_CLI", os.path.expanduser("~/.local/bin/macos-calendar-events"))`; `subprocess.run([CLI_PATH, "window", "--start", t0_utc, "--end", t1_utc, "--pad-minutes", "15"], capture_output=True, timeout=10)`, with `FileNotFoundError`/`TimeoutExpired`/non-zero/`json.JSONDecodeError` all mapped to "no hints", then a `schema_version` check, dedupe on `(external_id, occurrence_start)` for non-null `external_id`, and reconcile in your own code.
 
 ## Technical Specifications
 
@@ -442,7 +461,7 @@ This sketch is the single source for public signatures.
 # models.py
 SCHEMA_VERSION: Final = 1
 class AccessStatus(StrEnum): NOT_DETERMINED="not_determined"; RESTRICTED="restricted"; DENIED="denied"; FULL_ACCESS="full_access"; WRITE_ONLY="write_only"; UNKNOWN="unknown"
-class EventStatus(StrEnum): NONE="none"; CONFIRMED="confirmed"; TENTATIVE="tentative"; CANCELED="canceled"   # UNKNOWN member per Pending decision D3
+class EventStatus(StrEnum): NONE="none"; CONFIRMED="confirmed"; TENTATIVE="tentative"; CANCELED="canceled"; UNKNOWN="unknown"
 class ParticipationStatus(StrEnum): UNKNOWN="unknown"; PENDING="pending"; ACCEPTED="accepted"; DECLINED="declined"; TENTATIVE="tentative"; DELEGATED="delegated"; COMPLETED="completed"; IN_PROCESS="in_process"
 class ParticipantRole(StrEnum): UNKNOWN="unknown"; REQUIRED="required"; OPTIONAL="optional"; CHAIR="chair"; NON_PARTICIPANT="non_participant"
 class ParticipantType(StrEnum): UNKNOWN="unknown"; PERSON="person"; ROOM="room"; RESOURCE="resource"; GROUP="group"
@@ -466,12 +485,14 @@ class CalendarInfo:
 
 @dataclass(frozen=True, slots=True)
 class Event:
-    id: str                         # opaque; unique within one document (format not part of the contract; see D5)
+    id: str                         # opaque; unique within one response (format not part of the contract)
     external_id: str | None         # calendarItemExternalIdentifier
     event_identifier: str | None    # EKEvent.eventIdentifier; shared by occurrences of a series
     title: str | None
-    start: datetime; end: datetime  # tz-aware; end exclusive; whole seconds; offset per D2
-    all_day: bool; time_zone: str | None   # IANA when available, else raw EventKit name; None = floating
+    start: datetime; end: datetime  # UTC; end exclusive; whole seconds; serialized …Z
+    all_day: bool
+    start_date: date | None; end_date: date | None   # all-day only; end exclusive; computed in the adapter
+    time_zone: str | None           # informational: IANA when available, else raw EventKit name; None = floating
     location: str | None; url: str | None; notes: str | None
     status: EventStatus
     is_recurring: bool; is_detached: bool
@@ -499,7 +520,8 @@ def wait_for_access(request: Callable[[Callable[[bool, object | None], None]], N
 # _mapping.py  (pure)
 def access_status_from_int(value: int) -> AccessStatus: ...
 def parse_mailto(url: str) -> str | None: ...
-def validate_window(start: datetime, end: datetime) -> None: ...
+def validate_window(start: datetime, end: datetime) -> None: ...          # aware, utcoffset()==0, end > start, length <= 4*365-2 days
+def query_range(start: datetime, end: datetime) -> tuple[datetime, datetime]: ...  # (start - 1 day, end + 1 day)
 def select_calendars(cals: Sequence[RawCalendar], selectors: Sequence[str] | None) -> list[RawCalendar]: ...
 def overlaps(ev_start: datetime, ev_end: datetime, w_start: datetime, w_end: datetime) -> bool: ...
 def to_events(raw: Sequence[RawEvent], window: tuple[datetime, datetime], *, include_notes: bool) -> list[Event]: ...
@@ -518,16 +540,19 @@ def authorization_status() -> AccessStatus: ...
 def request_access(timeout: float = 60.0) -> AccessStatus: ...
 ```
 
-**Overlap rule:** `ev_start < w_end and ev_end > w_start`, plus the zero-duration case `ev_start == ev_end and w_start <= ev_start < w_end`. A Python filter can only remove rows, so completeness depends on the queried range being a superset of the window, which is per Pending decision D6.
+**Overlap rule:** `ev_start < w_end and ev_end > w_start`, plus the zero-duration case `ev_start == ev_end and w_start <= ev_start < w_end`. A Python filter can only remove rows, so completeness depends on the queried range being a superset of the window, which `query_range` guarantees by widening ±1 day (R13): date-anchored all-day and floating events can shift by up to a day relative to a UTC window.
 
 ### Architecture Decisions
 - **Adapter returns plain `Raw*` records (chosen) vs mapping over PyObjC objects (rejected).** B gives each piece of state one owner (EventKit facts in `_eventkit`, decisions in `_mapping`, waiting in `_access`), makes fakes trivial, and keeps ObjC out of the public surface. The adapter is not branch-free: its remaining branches (store lifetime, calendar-id resolution, timeout path) are unit-tested against an injected stub store, and only the PyObjC getter calls are left to the live smoke test.
 - **Return declined/canceled, never filter:** the consumer has context we lack (it may have attended a declined meeting).
 - **CLI subprocess is the cross-repo contract (user override, 2026-11-19).** Consumers depend on a versioned JSON document plus exit codes, not on Python types. That means koda never needs PyObjC in its environment, a crash or hang in EventKit can't take koda down, and internals can change freely within `schema_version` 1. The cost is ~100–200 ms startup per call, which is fine for once-per-session use.
-- **Separate rows per calendar:** the library never merges duplicates. `external_id` is exposed, and the consumer dedupe key is Pending decision D5.
+- **Separate rows per calendar:** the library never merges duplicates. `external_id` is exposed, and consumers dedupe on `(external_id, occurrence_start)` when `external_id` is non-null.
 - **macOS 14+ only, by feature detection:** one permission API, no deprecated code path, nothing untested.
 - **Reject rather than chunk over-cap windows** (subtract before you add; no observed need).
-- **Prompting:** the library defaults to `prompt=True` for interactive Python users. The CLI default is Pending decision D4.
+- **Prompting:** the library defaults to `prompt=True` for interactive Python users. The CLI prompts only with `--prompt`, because its main caller is a non-interactive subprocess with a 10 s timeout, and a prompt that can wait 60 s would guarantee a timeout under launchd.
+- **UTC-only boundary (user override):** input and output are UTC, so goldens are byte-stable on any machine, the library never needs the consumer's time zone, and no zone-name lookup can fail.
+- **Open enums:** Apple adds EventKit enum values (e.g. `FullAccess`/`WriteOnly` in macOS 14); open enums keep such additions within v1.
+- **Fresh store after grant, never `reset`:** safe whichever way Phase 0's store comparison comes out, and it keeps `reset` on the banned list.
 - **`notes` opt-in:** notes often carry dial-in codes and passcodes. koda passes `--include-notes` when it wants them for meeting matching.
 - **Schemas as package data:** one copy, readable by installed consumers and by tests.
 - **One type checker (mypy strict):** pyright would duplicate the gate.
@@ -544,13 +569,13 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 | `EventSource` protocol / `Raw*` records | `_eventkit.py` (P4), `tests/fakes.py` (P3) | `_api.py` (P3) | No ObjC objects; datetimes UTC-aware, whole seconds; nil → `None`; enum and authorization fields are raw EventKit ints; `color_rgb` sRGB floats or `None`; `events()` with `calendar_ids=None` means all calendars |
 | Access wait | `_access.py` (P3) | `_eventkit.py` (P4) | Returns a raw status int within `timeout`, whether or not the completion fires |
 | Access gate | `_api.py` (P3) | `__init__` (P4), `cli.py` (P5) | Raises `CalendarAccessError(status)` unless `full_access`; requests at most once per call, and only when `prompt=True` |
-| JSON schema v1 | `models.py` + `src/macos_calendar_events/schema/*.json` (P2) | CLI (P5), koda-pipecat (external) | Keys always present; RFC 3339 whole-second datetimes; UTF-8, `ensure_ascii=False`, sorted keys; additive-only within v1 (enum rule per D3); `schema_version` bumps on any breaking change (R18) |
-| CLI subprocess | `cli.py` (P5) | koda-pipecat (external) | Invoked by absolute path (install per D9); args per R7; stdout validates against v1 schema; exit codes per R11; stdout empty on error; consumer applies timeout and treats any failure as "no hints" |
+| JSON schema v1 | `models.py` + `src/macos_calendar_events/schema/*.json` (P2) | CLI (P5), koda-pipecat (external) | Keys always present; RFC 3339 whole-second datetimes; UTF-8, `ensure_ascii=False`, sorted keys; additive-only within v1, open enums; `schema_version` bumps on any breaking change (R18) |
+| CLI subprocess | `cli.py` (P5) | koda-pipecat (external) | UTC-only `--start`/`--end`; invoked by absolute path (`uv tool install …@v0.1.0`; `KODA_CALENDAR_CLI`); args per R7; stdout validates against v1 schema; exit codes per R11; stdout empty on error; consumer applies timeout and treats any failure as "no hints" |
 
 ## Testing Notes
 
 ### Test Approach
-- **Unit (CI + local):** Phases 1–5, through public or seam functions with `FakeSource`, injected requesters, or a stub store. Expected values come from the requirements, not from running the code. The golden-file rule is per D8.
+- **Unit (CI + local):** Phases 1–5, through public or seam functions with `FakeSource`, injected requesters, or a stub store. Expected values come from the requirements, not from running the code. The single exception is the generated, hand-reviewed goldens (R18).
 - **Live (local, opt-in):** `MACOS_CALENDAR_EVENTS_LIVE=1 uv run pytest -m live`, after the live preflight. Integer-count assertions only.
 - **Manual:** the Phase 0 spike; the Phase 5 launchd and reset/prompt checks; the Phase 6 README walk-through.
 
@@ -576,6 +601,9 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 | Non-macOS and no-PyObjC import | Phase 1 import, ubuntu CI |
 | macOS < 14 guard | Phase 4 platform guard |
 | Over-cap window and padding past the cap | Phases 3 and 5 |
+| Old absolute window and multi-week window | Phases 3 and 5 |
+| ±1-day query widening and all-day events near edges | Phase 3 |
+| Non-UTC or naive input | Phases 3 and 5 |
 | Non-ASCII output | Phases 2 and 5 |
 | Sub-second timestamps | Phase 2 |
 | Zero events | Phase 3 empty |
@@ -583,31 +611,40 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 ## Risks & Open Questions
 
-- **Risk: no TCC prompt from some terminals or from launchd.** The responsible app may lack `NSCalendarsFullAccessUsageDescription`, or there may be no app at all, leaving the status stuck at denied. *Mitigation:* Phase 0 measures every launch path; the reopen criteria are Pending decision D1; worst case, a follow-up plan ships a minimal helper `.app`.
+- **Risk: no TCC prompt from some terminals or from launchd.** The responsible app may lack `NSCalendarsFullAccessUsageDescription`, or there may be no app at all, leaving the status stuck at denied. *Mitigation:* Phase 0 measures every launch path; the reopen criteria are in Phase 0's exit checklist; worst case, a follow-up plan ships a minimal helper `.app`.
 - **Risk: the completion handler never fires without a run loop.** *Mitigation:* Phase 0 decides the run-loop strategy, and `wait_for_access` guarantees a bounded wait.
-- **Risk: a store created before the grant returns empty results after it** (exit 0 with `[]` on first run). *Mitigation:* Phase 0 measures it; lifetime per D7.
-- **Risk: `calendarItemExternalIdentifier` instability** (it can change for some sources after sync, and differ across accounts). *Mitigation:* `id` is opaque and per-document; the dedupe guidance is per D5 and provisional until Phase 0.
+- **Risk: a store created before the grant returns empty results after it** (exit 0 with `[]` on first run). *Mitigation:* Phase 0 measures it; a fresh store is built after a successful grant.
+- **Risk: `calendarItemExternalIdentifier` instability** (it can change for some sources after sync, and differ across accounts). *Mitigation:* `id` is opaque and per-document; the dedupe guidance `(external_id, occurrence_start)` is provisional until Phase 0.
 - **Risk: PyObjC/macOS version drift.** *Mitigation:* macOS 14 floor via feature detection, a tested PyObjC floor, CI on `macos-latest`, and a darwin-only test pinning EventKit constants.
 - **Risk: contract drift between repos.** *Mitigation:* R18 schemas with format checking, schema-model sync tests, goldens, `schema_version` checked by koda.
 - **Risk: privacy leaks through test or validation failures.** *Mitigation:* count-only live assertions, a value-free `validate_json.py`, `check_privacy.sh` in CI.
-- **Open questions:** nine review-plan decisions (D1–D9) are pending a `/grill` with the user and are listed under "Pending grill" below the marker. Contract text marked "Pending decision Dn" is finalized when those are resolved, and `/review-plan` must re-run afterwards.
+- **Open questions:** none. D1–D9 from `/review-plan` run 20261119T143424 were resolved via `/grill` on 2026-11-19 (see Decisions).
 
 ## Decisions
 
 - Decision (grilled): Notes are off by default (`include_notes=False`, CLI `--include-notes`). koda opts in when it needs notes for meeting matching. → R1, R3, Architecture Decisions.
-- Decision (grilled): One invite in two calendars returns separate rows with distinct `id`s and a shared `external_id`. koda dedupes; the library never merges. → R3, Non-Goals, Architecture Decisions. *(Review note: the exact dedupe key is refined in Pending decision D5.)*
+- Decision (grilled): One invite in two calendars returns separate rows with distinct `id`s and a shared `external_id`. koda dedupes; the library never merges. → R3, Non-Goals, Architecture Decisions. *(Refined by D5 below.)*
 - Decision (grilled): macOS 14 (Sonoma)+ only. The pre-14 `requestAccessToEntityType_completion_` path is dropped; minimum OS is stated in README and pyproject; Phases 0 and 4 test only the 14+ API. → R9, R11, R15, R19, Phases 0/1/4/6. *(Review note: no PyPI classifier expresses a macOS version, so R15 states the minimum in `description`/README and keeps generic classifiers; R19 enforces it at runtime by feature detection.)*
 - Decision (grilled): Plans live in `docs/dev_plans/` (skein convention), so `/plan-view` and `/conduct` find them.
 - Decision (grilled): Architecture override. koda-pipecat integrates via a **CLI subprocess**, not a library import. CLI + versioned JSON (`schema_version`) is the documented stable contract between repos; consumers call it with a timeout and treat any non-zero exit, timeout, or parse error as "no calendar hints". The Python API stays public but secondary (tests, in-process users). ~100–200 ms startup is acceptable. Phase 0 checks TCC attribution for a subprocess of a Terminal- or launchd-launched parent. Architecture gate confirmed by the user 2026-11-19 with this change. → Objective, Context, R7, R18, Architecture & Call Flow, Phases 0/2/5/6, Integration Seams.
+- Decision (grilled): D1. Phase 0 reopens the CLI-subprocess architecture only if the launchd-parented CLI can't get full access via any documented user step, or the permission callback never fires even with the run loop pumped. Other Phase 0 results update Phases 2–4, followed by a fresh `/review-plan`. → Phase 0 exit checklist, Risks.
+- Decision (grilled): D2 (user override). UTC everywhere at the contract boundary, input and output. CLI `--start`/`--end` accept only `Z`/`+00:00`; naive or non-UTC → exit 2 with a clear message (this supersedes "CLI naive = local"). The Python API rejects naive or non-zero-offset datetimes. All output instants are UTC `…Z`, whole seconds. koda converts to UTC before calling, and local presentation is the consumer's concern. `time_zone` stays informational; all-day events also carry `start_date`/`end_date` (exclusive end) computed in the adapter. → R3, R7, R12, R18, Review Focus, diagrams, Phases 0/2/3/4/5/6, type sketch, Acceptance.
+- Decision (grilled): D3. Enums are open within v1: strings with known values documented (`x-known-values`), consumers map unknown → `unknown`, `EventStatus` gains `UNKNOWN`; closed-enum tests are replaced by "every StrEnum value documented in schema". → R18, Phase 2, type sketch, seams.
+- Decision (grilled): D4. The CLI prompts only with `--prompt`; `--no-prompt` is removed; the Python API keeps `prompt=True`; the README says to grant once via `macos-calendar-events calendars --prompt` in Terminal. → R7, diagrams, Phases 5/6, Architecture Decisions.
+- Decision (grilled): D5. `id` is opaque and unique within a response. The documented dedupe key is `(external_id, occurrence_start)`, only when `external_id` is non-null, and it's provisional pending the Phase 0 cross-calendar check. → R3, Non-Goals, Phase 6, type sketch, Risks.
+- Decision (grilled): D6. The adapter always queries ±1 day beyond the already-padded caller window, and the Python overlap filter trims, because all-day and floating events are date-anchored and DST or zone shifts can move them up to a day relative to a UTC window. The cap (4×365 − 2 days on the padded window) limits window **length**, not age: windows may be arbitrarily far in the past (e.g. a crashed cron reprocessing an old session with absolute UTC times). Tests cover an old absolute window and a multi-week window. → R13, diagrams, Phases 3/4/5, overlap rule.
+- Decision (grilled): D7. One cached source per process; lazy store; a fresh store after a request that returns full access; `reset` is never called. Phase 0 may relax this to a single store. → R10, Phases 1/4, Architecture Decisions.
+- Decision (grilled): D8. Goldens are generated by `scripts/regen_goldens.py`, hand-reviewed, with a CHANGELOG line on change. This is stated as the single exception; Phase 2's hand-written expected values remain the independent check. → R18, Phases 1/5, Testing Notes.
+- Decision (grilled): D9. Install via `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0`. koda reads the absolute path from config/env (e.g. `KODA_CALENDAR_CLI`, default `~/.local/bin/macos-calendar-events`), and `FileNotFoundError` → no hints. launchd's PATH lacks `~/.local/bin`. → R18, Phase 6, seams.
 
 ## Acceptance Criteria
 
 - **R1, R3–R6, R8:** the Phase 3 named tests in `tests/test_window_query.py`, `tests/test_calendar_selection.py` and `tests/test_mailto.py` pass.
 - **R2:** the Phase 3 calendars tests pass, and the live smoke shows `list_calendars()` is non-empty.
-- **R7, R11 (exit codes 0–5, empty stdout on error, one stderr line for 1/3/4/5) and R12 (naive = local in the CLI, rejected in the API):** pass in `tests/test_cli.py` and `tests/test_cli_contract.py`, including real-subprocess cases.
+- **R7, R11 (exit codes 0–5, empty stdout on error, one stderr line for 1/3/4/5) and R12 (UTC-only input in the CLI and API; `Z` output):** pass in `tests/test_cli.py` and `tests/test_cli_contract.py`, including real-subprocess cases.
 - **R9:** `tests/test_access.py` (gate outcomes and the grant/deny/timeout wait) and `tests/test_eventkit_adapter.py` pass. On the Mac, the Phase 5 manual reset → `request_access()` run is recorded in Findings.
 - **R10 and R14:** `bash scripts/check_readonly.sh` passes, and `tests/test_check_scripts.py` proves it fails on seeded violations and on an unreadable path.
-- **R13:** the cap boundary tests (Phase 3) and the CLI over-cap and padding tests (Phase 5) pass.
+- **R13:** the cap boundary, old-absolute-window, multi-week and ±1-day widening tests (Phase 3) and the CLI over-cap, padding, old-window and multi-week tests (Phase 5) pass.
 - **R14:** `tests/test_import.py` passes, and the ubuntu CI job is green.
 - **R16:** `bash scripts/check_privacy.sh` passes in CI, the sentinel test in `tests/test_validate_json.py` passes, and the live smoke prints counts only.
 - **R17:** CI is green on macOS (3.11, 3.13) and ubuntu (3.12) for the pushed branch.
@@ -718,21 +755,13 @@ Codebase claims were re-verified:
 | #81 | `if __name__ == "__main__": sys.exit(main())`; real-subprocess and console-script exit-code tests |
 | #82 | Acceptance criteria per requirement, naming test files (R11–R13 added; R2/R7 re-pointed) |
 
-### Pending grill (from `/review-plan` run 20261119T143424; not yet resolved; resolve before `/conduct`)
+### Pending grill: resolved 2026-11-19
 
-Ordered so that blocking decisions come first. Each has one recommendation. After grilling, apply via `/dev-plan update` as `Decision (grilled): …`, replace the "Pending decision Dn" markers above, and re-run `/review-plan`.
+D1–D9 from `/review-plan` run 20261119T143424 were grilled with the user on 2026-11-19 and applied above the marker as `Decision (grilled): D1…D9`. D2 was an override (UTC-only input and output); D6 was accepted with clarifications (rationale for the ±1-day widening; the cap limits length, not age). The others were accepted as recommended.
 
-- **D1** (#26, #21): Which Phase 0 outcomes reopen the confirmed CLI-subprocess architecture?
-- **D2** (#3, #4, #64, #7, #57): Which UTC offset do serialized datetimes carry, and who owns it?
-- **D3** (#12, #25, #36): Is a new enum value additive within schema v1?
-- **D4** (#18, #72, #5, #38): What is the CLI's prompt default?
-- **D5** (#10, #13, #71): What is the documented dedupe key, and is `id` opaque?
-- **D6** (#9, #39, #63, #79): Does the adapter widen the queried range, and which range does the four-year cap measure?
-- **D7** (#6, #16, #17, #46): What is the `EKEventStore` lifetime after a grant, and is `reset` allowed?
-- **D8** (#60, #69): Are goldens generated from code or hand-written?
-- **D9** (#23): What is the supported install path, and how does a launchd-started koda locate the CLI?
+### Re-review required
 
-(Full questions and recommendations are in the parent agent's report for the grill session.)
+**`/review-plan` must re-run before `/conduct`.** D2 changed the CLI and Python **input contract** (UTC-only `--start`/`--end`; non-UTC rejected with exit 2), which supersedes the earlier "naive = local" rule. D2, D3 and D6 also changed the output schema (`start_date`/`end_date`, open enums, `EventStatus.UNKNOWN`) and the query range. The review marker is intentionally left unfilled.
 
 ## Issues & Solutions
 
