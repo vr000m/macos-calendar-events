@@ -3,8 +3,8 @@
 Usage: <command> | uv run python scripts/validate_json.py {window-v1|calendars-v1}
 
 Prints only JSON paths and validator keywords, never values. Exit codes: 0 valid,
-1 schema violations, 2 usage error, empty stdin or not JSON (``NaN``/``Infinity`` count as
-not JSON).
+1 schema violations, 2 usage error, empty stdin or not JSON (``NaN``/``Infinity``, and
+nesting deeper than the decoder can recurse, count as not JSON).
 """
 
 from __future__ import annotations
@@ -39,7 +39,8 @@ def main(argv: list[str]) -> int:
         return 2
     try:
         document = json.loads(raw, parse_constant=_reject_constant)
-    except ValueError:  # the decoder message can quote input; never print it
+    except (ValueError, RecursionError):  # RecursionError: nested deeper than the decoder recurses
+        # The decoder message can quote input; never print it.
         print("invalid: not JSON", file=sys.stderr)
         return 2
     errors = sorted(validator.iter_errors(document), key=lambda e: e.json_path)

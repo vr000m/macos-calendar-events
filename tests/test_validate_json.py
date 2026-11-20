@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from macos_calendar_events.models import window_to_json
 from tests.model_fixtures import ALL_DAY, TIMED, WINDOW
 
@@ -79,3 +81,20 @@ def test_non_standard_json_constants_are_not_json() -> None:
         assert proc.stdout == b""
     for value in ("1.5", "-0", "1e308", "null", '"NaN"'):  # standard JSON still validates
         assert _run(f'{base}, "extra": {value}}}'.encode(), "window-v1").returncode == 0, value
+
+
+@pytest.mark.parametrize(
+    "stdin",
+    [
+        b"[" * 20_000,  # unmatched, deeper than the decoder's recursion limit
+        b"[" * 20_000 + b"]" * 20_000,  # well-formed but too deep to decode
+        b'{"a":' * 20_000,
+        b'{"schema_version": 1, "events": ' + b"[" * 20_000,
+        b"{" + SENTINEL.encode(),  # ordinary malformed input
+    ],
+)
+def test_undecodable_input_exits_2_without_traceback(stdin: bytes) -> None:
+    proc = _run(stdin, "window-v1")
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.decode().splitlines() == ["invalid: not JSON"]
+    assert proc.stdout == b""
