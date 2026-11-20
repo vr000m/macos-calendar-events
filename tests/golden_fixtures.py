@@ -17,7 +17,13 @@ class CliFixture(NamedTuple):
 
 
 CALENDARS = [
-    raw_calendar("cal-work", title="Work", source_title="Example Org", source_type=1),
+    raw_calendar(
+        "cal-work",
+        title="Work",
+        source_title="Example Org",
+        source_type=1,
+        color_rgb=(1.0, 0.4, 0.0),  # #FF6600, distinct from the builder default
+    ),
     raw_calendar(
         "cal-home",
         title="Home",
