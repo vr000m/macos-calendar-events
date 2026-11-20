@@ -8,6 +8,7 @@ writes exactly one stderr line; stdout is written once, only on success.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Callable, Sequence
 from datetime import timedelta
@@ -38,6 +39,8 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=PROG,
         description="Read-only macOS Calendar window queries as JSON (macOS 14+).",
+        # No prefix matching: ``--pro``/``--i`` must not opt in to prompting or notes.
+        allow_abbrev=False,
     )
     parser.add_argument(
         "--version",
@@ -46,7 +49,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
-    window = sub.add_parser("window", help="events overlapping [start, end) as JSON")
+    window = sub.add_parser(
+        "window", help="events overlapping [start, end) as JSON", allow_abbrev=False
+    )
     window.add_argument("--start", required=True, help="epoch seconds or RFC 3339 UTC")
     window.add_argument("--end", required=True, help="epoch seconds or RFC 3339 UTC")
     window.add_argument(
@@ -60,12 +65,12 @@ def _parser() -> argparse.ArgumentParser:
     window.add_argument("--include-notes", action="store_true")
     window.add_argument("--prompt", action="store_true", help="ask for Calendar access if needed")
 
-    calendars = sub.add_parser("calendars", help="event calendars as JSON")
+    calendars = sub.add_parser("calendars", help="event calendars as JSON", allow_abbrev=False)
     calendars.add_argument(
         "--prompt", action="store_true", help="ask for Calendar access if needed"
     )
 
-    schema = sub.add_parser("schema", help="print a packaged JSON Schema")
+    schema = sub.add_parser("schema", help="print a packaged JSON Schema", allow_abbrev=False)
     schema.add_argument("name", choices=SCHEMA_NAMES)
     return parser
 
@@ -78,6 +83,17 @@ def _stderr_line(text: str) -> None:
 def _write_stdout(data: bytes) -> None:
     sys.stdout.buffer.write(data)
     sys.stdout.flush()
+
+
+def _discard_stdout() -> None:
+    """Point fd 1 at /dev/null so the interpreter's exit-time flush of the bytes a failed
+    write left buffered can't raise a second error (e.g. a reader that closed the pipe)."""
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    except (OSError, ValueError):  # no real fd (e.g. a test capture): nothing to protect
+        pass
 
 
 def _run(args: argparse.Namespace, get_source: Callable[[], EventSource]) -> bytes:
@@ -133,7 +149,12 @@ def main(argv: Sequence[str] | None = None, *, source: EventSource | None = None
     except Exception as exc:
         _stderr_line(f"internal error: {type(exc).__name__}")
         return EXIT_INTERNAL
-    _write_stdout(output)
+    try:
+        _write_stdout(output)
+    except Exception as exc:  # e.g. BrokenPipeError: the same one-line exit 1 (R11)
+        _discard_stdout()
+        _stderr_line(f"internal error: {type(exc).__name__}")
+        return EXIT_INTERNAL
     return EXIT_OK
 
 

@@ -209,6 +209,37 @@ def test_no_prompt_option_does_not_exist() -> None:
     assert info.value.code == 2
 
 
+# Every unambiguous prefix of every long option, per subcommand: argparse's default prefix
+# matching would read ``--pro`` as ``--prompt`` and ``--i`` as ``--include-notes``.
+_FLAGS = ("--include-notes", "--prompt")  # options that take no value
+_OPTIONS = {
+    "window": ("--start", "--end", "--calendar", "--pad-minutes", *_FLAGS),
+    "calendars": ("--prompt",),
+}
+_ABBREVIATED = [
+    (command, option, option[:length])
+    for command, options in _OPTIONS.items()
+    for option in options
+    for length in range(3, len(option))
+    if sum(o.startswith(option[:length]) for o in options) == 1
+]
+
+
+@pytest.mark.parametrize(("command", "option", "prefix"), _ABBREVIATED)
+def test_abbreviated_options_are_rejected(command: str, option: str, prefix: str) -> None:
+    fake = source(status=NOT_DETERMINED, status_after_request=3)
+    base = window() if command == "window" else ["calendars"]
+    value = [] if option in _FLAGS else ["5" if option == "--pad-minutes" else START]
+    with pytest.raises(SystemExit) as info:
+        main([*base, prefix, *value], source=fake)
+    assert info.value.code == 2
+    assert fake.requests == []  # an abbreviation never prompts
+
+
+def test_abbreviation_table_includes_the_reported_cases() -> None:
+    assert {("calendars", "--pro"), ("window", "--i")} <= {(c, p) for c, _, p in _ABBREVIATED}
+
+
 # --- error mapping and R11 order ------------------------------------------------------
 
 
@@ -469,3 +500,59 @@ def test_regen_script_renders_without_writing() -> None:
     rendered = module.render_all()
     assert sorted(rendered) == ["calendars-v1.json", "window-v1.json"]
     assert all(data.endswith(b"}\n") for data in rendered.values())
+
+
+# --- stdout write failures (R11: exit 1, one stderr line) ------------------------------
+
+
+class _FailingBuffer:
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+    def write(self, data: bytes) -> int:
+        raise self.exc
+
+
+class _FailingStdout:
+    def __init__(self, exc: BaseException) -> None:
+        self.buffer = _FailingBuffer(exc)
+
+    def flush(self) -> None:
+        pass
+
+    def fileno(self) -> int:
+        raise OSError("no fd")
+
+
+@pytest.mark.parametrize("exc", [BrokenPipeError(32, "Broken pipe"), OSError(28, "No space")])
+@pytest.mark.parametrize("argv", [["schema", "window-v1"], ["calendars"], window()])
+def test_stdout_write_failure_is_one_line_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
+    exc: BaseException,
+) -> None:
+    monkeypatch.setattr(sys, "stdout", _FailingStdout(exc))
+    code = main(argv, source=source())
+    err = capsys.readouterr().err
+    assert code == 1
+    assert err.splitlines() == [f"internal error: {type(exc).__name__}"]
+
+
+def test_closed_stdout_pipe_exits_1_with_one_line_subprocess() -> None:
+    import os
+
+    read_end, write_end = os.pipe()
+    os.close(read_end)  # the reader went away before the CLI writes
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "macos_calendar_events.cli", "schema", "window-v1"],
+            stdout=write_end,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+    finally:
+        os.close(write_end)
+    assert proc.returncode == 1
+    assert proc.stderr.splitlines() == ["internal error: BrokenPipeError"]
