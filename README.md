@@ -183,9 +183,11 @@ def calendar_hints(start: int, end: int) -> list[dict] | None:
     try:
         schema = _cli_json("schema", "window-v1")  # cache this if you call often
         doc = _cli_json("window", "--start", str(start), "--end", str(end), "--pad-minutes", "15")
-        # format_checker: dates are checked too (by default `format` is not enforced);
-        # the schema also pins schema_version == 1 (const)
+        # format_checker: dates are checked too (by default `format` is not enforced)
         jsonschema.validate(doc, schema, format_checker=jsonschema.FormatChecker())
+        version = doc["schema_version"]  # checked here, not left to the fetched schema
+        if isinstance(version, bool) or version != 1:  # True == 1 in Python
+            return None
         return doc["events"]
     except Exception:  # any failure means no hints, never a crash
         return None

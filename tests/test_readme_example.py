@@ -105,6 +105,28 @@ def test_schema_invalid_document_is_no_hints(
     assert _calendar_hints()(1763568000, 1763571600) is None
 
 
+@pytest.mark.parametrize("schema", [b"true", b"{}", b'{"type": "object"}'])
+@pytest.mark.parametrize(
+    ("version", "accepted"),
+    [
+        (1, True),
+        (2, False),
+        (0, False),
+        (True, False),
+        ("1", False),
+        (None, False),
+        (_MISSING, False),
+    ],
+)
+def test_version_is_checked_even_when_the_schema_does_not_pin_it(
+    monkeypatch: pytest.MonkeyPatch, schema: bytes, version: Any, accepted: bool
+) -> None:
+    """A schema that accepts anything must not let a schema_version other than 1 through."""
+    _install(monkeypatch, (0, schema), (0, _doc(schema_version=version)))
+    hints = _calendar_hints()(1763568000, 1763571600)
+    assert hints == (GOLDEN["events"] if accepted else None)
+
+
 @pytest.mark.parametrize(
     ("schema", "window"),
     [
