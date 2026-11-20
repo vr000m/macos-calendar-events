@@ -236,8 +236,9 @@ reflect the Mac's time zone at query time. A full example lives in
 | 5 | A `--calendar` selector matched nothing |
 
 Use stdout only on exit 0. Every non-zero exit leaves stdout empty, except an exit 1 from a
-stdout write that fails partway (for example a full non-blocking pipe or a full disk), which
-can leave a truncated prefix.
+stdout write that fails partway (for example a full non-blocking pipe or a full disk). When
+stdout is a regular file (`> out.json`, `>> out.json`) the CLI cuts its own bytes back off,
+so the file is as it was; a pipe cannot take bytes back and can keep a truncated prefix.
 
 ## Python API
 
