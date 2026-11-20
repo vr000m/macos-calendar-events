@@ -1,6 +1,7 @@
 """Adapter branches against stub EventKit objects; conversions against real Foundation
 objects on macOS (no store, no TCC)."""
 
+import subprocess
 import sys
 import time
 from datetime import UTC, datetime
@@ -187,6 +188,24 @@ def test_non_rgb_color_converts_to_srgb_or_none() -> None:
     got = ns.to_srgb(blue)
     assert got is not None
     assert [round(c, 3) for c in got] == [0.0, 0.5, 1.0]
+
+
+@darwin
+def test_local_components_are_gregorian_whatever_the_user_calendar() -> None:
+    # A Mac set to a Buddhist calendar: ``currentCalendar`` would report year 2568.
+    code = (
+        "from macos_calendar_events._eventkit import _load_namespace\n"
+        "ns = _load_namespace()\n"
+        "print(ns.local_components(ns.make_date(1763568000.0))[:2])\n"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code, "-AppleLocale", "th_TH@calendar=buddhist"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "(2025, 11)"
 
 
 @darwin

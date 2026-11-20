@@ -53,8 +53,15 @@ def _load_namespace() -> EventKitNamespace:
     def make_date(seconds: float) -> Any:
         return Foundation.NSDate.dateWithTimeIntervalSince1970_(seconds)
 
+    # Always Gregorian: ``currentCalendar`` follows the user's calendar preference, so a
+    # Buddhist, Japanese, Hebrew or Islamic setting would yield non-Gregorian Y/M/D. The
+    # time zone of a new calendar is the system default, as ``currentCalendar``'s was.
+    gregorian = Foundation.NSCalendar.calendarWithIdentifier_(
+        Foundation.NSCalendarIdentifierGregorian
+    )
+
     def local_components(ns_date: Any) -> LocalComponents:
-        c = Foundation.NSCalendar.currentCalendar().components_fromDate_(units, ns_date)
+        c = gregorian.components_fromDate_(units, ns_date)
         return (
             int(c.year()),
             int(c.month()),
