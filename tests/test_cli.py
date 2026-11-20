@@ -400,15 +400,28 @@ def test_golden_fixtures_render_schema_valid_output(run: Callable[..., Out]) -> 
     result = run(window_fixture.argv, window_fixture.source)
     assert result.code == 0
     assert list(_schema("window-v1").iter_errors(result.doc)) == []
-    titles = [e["title"] for e in result.doc["events"]]
-    assert "Réunion — 会議 ☕" in titles  # non-ASCII, unescaped
-    assert "Early sync" in titles  # only inside the 15-minute padding
-    assert "Late" not in titles
-    assert result.doc["window"]["start_ts"] == 1763568000 - 15 * 60
+    events = {e["title"]: e for e in result.doc["events"]}
+    assert "Réunion — 会議 ☕" in events  # non-ASCII, unescaped
+    assert "Late" not in events
+    window = result.doc["window"]
+    assert (window["start_ts"], window["end_ts"]) == (1763568000 - 900, 1763571600 + 900)
+
+    # Early sync is selected only because of --pad-minutes 15.
+    early = events["Early sync"]
+    unpadded = (1763568000, 1763571600)
+    padded = (window["start_ts"], window["end_ts"])
+    assert not (early["start_ts"] < unpadded[1] and early["end_ts"] > unpadded[0])
+    assert early["start_ts"] < padded[1] and early["end_ts"] > padded[0]
+
+    # Canceled events are returned with their status (R5).
+    canceled = [e for e in result.doc["events"] if e["status"] == "canceled"]
+    assert [e["title"] for e in canceled] == ["Canceled check-in"]
     calendars_fixture = build_calendars_fixture()
     result = run(calendars_fixture.argv, calendars_fixture.source)
     assert result.code == 0
     assert list(_schema("calendars-v1").iter_errors(result.doc)) == []
+    colors = [c["color_hex"] for c in result.doc["calendars"] if c["color_hex"] is not None]
+    assert len(colors) == len(set(colors))  # non-null colors are distinct
 
 
 def test_regen_script_renders_without_writing() -> None:
