@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "macos-calendar-events"
+dynamic = ["version"]
+description = "Read-only macOS Calendar (EventKit) window queries with a versioned JSON CLI. Requires macOS 14 (Sonoma) or newer."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "BSD-2-Clause"
+license-files = ["LICENSE"]
+authors = [{ name = "Varun Singh" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Operating System :: MacOS",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Office/Business :: Scheduling",
+    "Typing :: Typed",
+]
+dependencies = ["pyobjc-framework-EventKit>=13; sys_platform == 'darwin'"]
+
+[project.scripts]
+macos-calendar-events = "macos_calendar_events.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff", "mypy", "jsonschema[format-nongpl]", "types-jsonschema"]
+
+[tool.hatch.version]
+path = "src/macos_calendar_events/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/macos_calendar_events"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "scripts", "docs/schema", "README.md", "CHANGELOG.md", "LICENSE"]
+
+[tool.uv]
+required-version = ">=0.9"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# Markdown code blocks (the dev plan's type sketch) are documentation, not code to format.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+files = ["src", "tests"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["EventKit", "EventKit.*", "Foundation", "Foundation.*", "AppKit", "AppKit.*", "objc", "objc.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: touches the real macOS calendar; opt-in"]
