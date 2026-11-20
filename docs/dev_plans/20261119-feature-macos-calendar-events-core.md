@@ -1201,6 +1201,17 @@ Each fix has a table-driven regression test that failed with the fix reverted (m
 - Live cap check compares multisets of full row keys (both identifiers, occurrence start, start, end); chunks merge by per-key maximum.
 - README: the integration example validates against the installed CLI's schema with `jsonschema` (any exception means no hints); Privacy says `notes` is `null`, not omitted.
 
+### Review-gauntlet fixes (round 3, 2026-11-20; uncommitted fixer pass)
+
+Each fix has a table-driven regression test that failed with the fix reverted (mutation check):
+- R6 regression from round 2: `select_calendars` compared selectors only with the cleaned output id, so the exact raw `calendarIdentifier` of a calendar holding a lone surrogate no longer matched, and fell through to title matching. A selector now matches by id when it equals the raw id **or** the output id (the two differ only for a lone surrogate).
+- `window_to_json` runs the whole-window check `events_in_window` runs (`_mapping.parse_window` = `parse_instant` on both bounds + `validate_window`), shared by `_api.query_events`. Round 2 parsed each bound only, so `(10, 5)`, `(5, 5)` and over-cap windows serialized. The call-time import of `_mapping` from `models` stays: the plan places `window_to_json` in `models` (Phase 2) and the parser in `_mapping` (R12), and `_mapping` builds `models` types.
+- CLI stdout writer: a text-only stdout with no `.buffer` (an in-process `redirect_stdout(io.StringIO())`) gets the same UTF-8 text; round 2's writer raised `AttributeError` there, so `main(["--version"])` exited 1.
+- R11 wording vs behaviour: a stdout write that fails partway (a full non-blocking pipe, a full disk) exits 1 and can leave a prefix of the output on stdout; bytes already written can't be withdrawn. README and the `cli.py` docstring say so and tell consumers to use stdout only on exit 0. R11's "every non-zero exit leaves stdout empty" (above the marker) is unchanged and is accurate for every exit except that one.
+- README integration example: `json.loads(..., parse_constant=...)` rejects `NaN`/`Infinity`, and `jsonschema.validate(..., format_checker=jsonschema.FormatChecker())` enforces `date-time`/`date`; install line is `jsonschema[format-nongpl]` (the `date-time` checker needs `rfc3339-validator`).
+- `scripts/check_imports.py` bans every top-level module the PyObjC dependencies install (adds `Cocoa`, `CoreFoundation`, `PyObjCTools`, `PyObjCTest`); `Cocoa` re-exports Foundation and AppKit.
+- `scripts/check_privacy.sh` passes `./$path` to grep: a file named `-` made grep read stdin (the rest of the NUL listing), so it and every later path went unscanned.
+
 ### Next step
 
 Phase 0 is done and the plan was reviewed (marker above). Remaining: push the branch, merge PR #1, tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
