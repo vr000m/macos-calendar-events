@@ -53,7 +53,7 @@ prompts unless you pass `--prompt`; without it, a missing grant exits 3 immediat
   job. The grant belongs to the job's executable (for example the consumer's Python
   interpreter), which may not be the CLI's. Don't make `uv run`, a shell or another wrapper
   the job's executable, because the grant would then belong to an ephemeral or shared
-  binary. The grant run needs a logged-in GUI session (the `gui/$UID` domain) and a timeout
+  binary. The grant run needs a logged-in GUI session (the `gui/$(id -u)` domain) and a timeout
   of at least 70 s, because the CLI waits up to 60 s for the answer. Exit 0 means granted;
   exit 3 means denied, or that no prompt could be shown. Normal runs keep a short timeout
   (10 s is plenty).
@@ -137,8 +137,10 @@ query takes about 0.3 s, and the first launch of a fresh install about 1.6 s).
   non-zero exit, a signal, a timeout, a missing executable, invalid JSON, a schema mismatch,
   or a `schema_version` other than 1.
 - Send `--start`/`--end` as integer Unix epoch seconds (RFC 3339 UTC with `Z` or `+00:00` is
-  also accepted). Every output instant has an integer `_ts` sibling (`start_ts`, `end_ts`,
-  `occurrence_start_ts`; the window echo has `start_ts`/`end_ts`), so you never parse dates.
+  also accepted), at or after 1970, with nothing around the value (no whitespace or trailing
+  newline); anything else exits 2. Every output instant has an integer `_ts` sibling
+  (`start_ts`, `end_ts`, `occurrence_start_ts`; the window echo has `start_ts`/`end_ts`), so
+  you never parse dates.
 - The output schemas are `docs/schema/window-v1.schema.json` and
   `docs/schema/calendars-v1.schema.json`. Use the copy **at the tag matching the installed
   CLI**, e.g.
@@ -196,7 +198,8 @@ macos-calendar-events schema calendars-v1
 The window document is `{schema_version, window: {start, end, start_ts, end_ts}, events}`,
 where `window` echoes the padded window. Events are sorted by `(start, end, calendar.id,
 id)`; all instants are UTC with whole seconds. All-day events carry `start_date` and
-`end_date` (`YYYY-MM-DD`, end exclusive); use those rather than the UTC instants, which
+`end_date` (Gregorian `YYYY-MM-DD` whatever the Mac's calendar setting, end exclusive); use
+those rather than the UTC instants, which
 reflect the Mac's time zone at query time. A full example lives in
 `tests/golden/window-v1.json`.
 
@@ -240,8 +243,8 @@ raises `InvalidQueryError`. `events_in_window` and `list_calendars` default to `
   that state. Use `--calendar` to restrict.
 - Exchange delegate calendars are unverified.
 - A window may be at most 3×365−2 days long (after padding); longer windows exit 2 instead
-  of being silently truncated by EventKit. Windows may be arbitrarily far in the past, but the end must not be after
-  9999-12-30T23:59:59Z; a later end exits 2.
+  of being silently truncated by EventKit. Windows may be arbitrarily far in the past, but
+  the end must not be after 9999-12-30T23:59:59Z; a later end exits 2.
 - `external_id` may be null, and one invite can appear once per calendar.
 - Floating (no time zone) and all-day events are placed using the Mac's current time zone.
 - `time_zone` is informational: an IANA name when available, otherwise EventKit's raw name.
