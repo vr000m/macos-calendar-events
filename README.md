@@ -169,8 +169,11 @@ def calendar_hints(start: int, end: int) -> list[dict] | None:
         if proc.returncode != 0:
             return None
         doc = json.loads(proc.stdout)
-        return doc["events"] if doc.get("schema_version") == 1 else None
-    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError):
+        if not isinstance(doc, dict) or doc.get("schema_version") != 1:
+            return None
+        events = doc.get("events")
+        return events if isinstance(events, list) else None
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return None
 ```
 
@@ -243,8 +246,11 @@ raises `InvalidQueryError`. `events_in_window` and `list_calendars` default to `
   that state. Use `--calendar` to restrict.
 - Exchange delegate calendars are unverified.
 - A window may be at most 3×365−2 days long (after padding); longer windows exit 2 instead
-  of being silently truncated by EventKit. Windows may be arbitrarily far in the past, but
-  the end must not be after 9999-12-30T23:59:59Z; a later end exits 2.
+  of being silently truncated by EventKit. The cap keeps a year of margin below the span
+  where a row went missing once, but it is not verified at its full length; if the opt-in
+  live consistency check finds missing rows, a later release lowers it. Windows may be
+  arbitrarily far in the past, but the end must not be after 9999-12-30T23:59:59Z; a later
+  end exits 2.
 - `external_id` may be null, and one invite can appear once per calendar.
 - Floating (no time zone) and all-day events are placed using the Mac's current time zone.
 - `time_zone` is informational: an IANA name when available, otherwise EventKit's raw name.
