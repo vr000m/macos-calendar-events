@@ -33,7 +33,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - `color_hex`: `#RRGGBB` in sRGB, or `None` if conversion fails.
   - `read_only`: `not EKCalendar.allowsContentModifications`.
 
-  Calendars are sorted by `(source_title is not None, source_title or "", title, id)`, so calendars with a null `source_title` sort first.
+  Calendars are sorted by `(source_title is not None, source_title or "", title or "", id)`, so calendars with a null `source_title` sort first.
 - R3. `Event` fields:
   - Identity: `id` (opaque string, unique within one response; its format is not part of the contract), `external_id`, `event_identifier`. Documented consumer dedupe key: `(external_id, occurrence_start)`, only when `external_id` is non-null; rows with a null `external_id` are never deduped. This guidance is provisional until Phase 0 reports whether one invite in two calendars actually shares an external id. **`id` derivation (internal, owned by `_mapping.assign_ids`, not contract):** base key `(calendar.id, external_id or event_identifier or "", occurrence_start, start, end)`, SHA-256-hashed and truncated to 16 hex chars. Rows whose base keys collide within one response get an ordinal suffix (`-2`, `-3`, …) in order of `(title or "", location or "")`, then EventKit order. Uniqueness therefore holds by construction, and ids are stable across identical calls.
   - Content: `title`, `location`, `url`, `notes` (only when `include_notes=True`, else `None`).
@@ -41,7 +41,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - State: `status`, `is_recurring` (`hasRecurrenceRules or isDetached`), `is_detached`, `occurrence_start`.
   - People and calendar: `organizer: Participant | None`, `attendees: tuple[Participant, ...]`, `self_status: ParticipationStatus | None`, `calendar: CalendarRef`.
 
-  Nullability is decided up front, because R18 forbids retyping later. The type sketch is authoritative. Nullable: `title`, `event_identifier`, `time_zone`, `external_id`, `location`, `url`, `notes`, `start_date`, `end_date`, `organizer`, `self_status`, `calendar.source_title`, and participant `name`/`email`/`url`. Non-null: `calendar.id`, `calendar.title`, `start`, `end`, `occurrence_start`. How the adapter handles an EventKit nil in a non-null field is Pending decision R2-3. `time_zone` is "IANA name when available, otherwise EventKit's raw zone name, `None` for floating". `occurrence_start` falls back to `start` when `occurrenceDate` is nil.
+  Nullability is decided up front, because R18 forbids retyping later. The type sketch is authoritative. Nullable: `title`, `event_identifier`, `time_zone`, `external_id`, `location`, `url`, `notes`, `start_date`, `end_date`, `organizer`, `self_status`, `calendar.source_title`, `calendar.title`, and participant `name`/`email`/`url`. Non-null: `calendar.id`, `start`, `end`, `occurrence_start`. An event whose EventKit `startDate`, `endDate` or calendar identifier is nil is **skipped**, never emitted with a placeholder. `occurrence_start` falls back to `start`, so it can only be missing when `start` is. The pure `_mapping.to_events` does the skipping and reports a skip count, which Phase 0 and the live smoke record. `time_zone` is "IANA name when available, otherwise EventKit's raw zone name, `None` for floating". `occurrence_start` falls back to `start` when `occurrenceDate` is nil.
 - R4. `Participant`:
   - `name | None`, `email | None`, `url | None`, `role`, `status`, `type` (person/room/resource/group/unknown), `is_self` (`EKParticipant.isCurrentUser`).
   - `email` follows RFC 6068 parsing. The scheme is compared case-insensitively. The path's address list is split on `,` **before** percent-decoding, and the first path address wins. If the path is empty, the first address of a `to=` hfield is used; other hfields are ignored. Surrounding whitespace is trimmed, and the result is `None` when no address remains. `url` is the raw URL **only when it is not `mailto:`**, otherwise `None`.
@@ -52,8 +52,10 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Any selector that matches nothing raises `CalendarNotFoundError` listing available titles, even when other selectors match.
   - `calendars=[]` raises `InvalidQueryError` (a `ValueError` subclass). The CLI's exit-5 stderr line names only the unmatched selectors via `repr()`, never calendar titles, so it stays one line. `None` means all calendars. The filter is **never** silently ignored.
 - R7. CLI commands:
-  - `macos-calendar-events window --start UTC --end UTC [--calendar X ...] [--pad-minutes N] [--include-notes] [--prompt]`
+  - `macos-calendar-events window --start T --end T [--calendar X ...] [--pad-minutes N] [--include-notes] [--prompt]`
   - `macos-calendar-events calendars [--prompt]`
+  - `macos-calendar-events schema {window-v1|calendars-v1}` writes the packaged schema bytes to stdout (exit 0; an unknown name exits 2).
+  - `T` is either a non-negative integer of Unix epoch seconds or an RFC 3339 UTC string (R12).
   - The CLI **never prompts for Calendar access unless `--prompt` is passed**. There is no `--no-prompt` flag. Without `--prompt`, a `not_determined` status exits 3 immediately. The README tells users to grant access once by running `macos-calendar-events calendars --prompt` from Terminal.
   - `macos-calendar-events --version`, which prints `macos-calendar-events <version> (schema_version 1)`.
 
@@ -85,10 +87,10 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 
   On exits 1, 3, 4 and 5, the CLI itself writes exactly one stderr line. Apple frameworks or PyObjC may add their own output (Phase 0 records whether they do), so consumers must not parse stderr. Every non-zero exit leaves stdout empty, because stdout is written once, after serialization succeeds. A process killed by a signal (for example a TCC refusal, if Phase 0 observes one) is outside the CLI's control. Consumers treat it like any other failure.
 - R12. **UTC at the contract boundary, input and output.**
-  - **CLI:** `--start`/`--end` must be ISO 8601 UTC, written with `Z` or `+00:00`. Naive values and any non-zero offset exit `2` with a one-line message (e.g. `--start must be UTC (end with Z or +00:00)`). This supersedes the earlier "naive = local" rule. Grammar: the string must match `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)$`, then is parsed with `datetime.fromisoformat` (Python 3.11+). Fractional seconds are accepted and truncated to whole seconds. Whether RFC 3339 `-00:00` is rejected is Pending decision Q-a (the regex as written rejects it).
-  - **Python API:** `start`/`end` must be timezone-aware with `utcoffset() == timedelta(0)`. Naive or non-zero-offset datetimes raise `InvalidQueryError` (a `ValueError` subclass), for symmetry with the CLI; there is no silent normalization.
-  - **Output:** every instant (`start`, `end`, `occurrence_start`, echoed window) is UTC `…Z` with whole seconds.
-  - **Consumer's job:** koda converts its session times to UTC before calling. The library never needs the consumer's time zone, and local-time presentation is the consumer's concern.
+  - **CLI:** `--start`/`--end` accept exactly two forms. (a) **Non-negative integer Unix epoch seconds**, matching `^[0-9]+$` (e.g. `1763568000`); this is the form koda sends. (b) An **RFC 3339 UTC string** matching `^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|\+00:00)$`, parsed with `datetime.fromisoformat` (Python 3.11+), with fractional seconds truncated to whole seconds. Everything else exits `2` with a one-line message: negative or float epochs, naive strings, `-00:00`, and any other offset. This supersedes the earlier "naive = local" rule.
+  - **Python API:** `start`/`end` accept a non-negative `int` of epoch seconds (not `bool`, not `float`) or a timezone-aware `datetime` with `utcoffset() == timedelta(0)`. Naive or non-zero-offset datetimes, floats, negative ints, and epochs outside `datetime`'s range raise `InvalidQueryError` (a `ValueError` subclass), for symmetry with the CLI. Both entry points normalize through the pure `_mapping.parse_instant` / `_mapping.parse_instant_text`.
+  - **Output:** every instant (`start`, `end`, `occurrence_start`, and the echoed padded window's `start`/`end`) is emitted twice: as a UTC `…Z` string with whole seconds, and as a required integer epoch-seconds sibling (`start_ts`, `end_ts`, `occurrence_start_ts`; the window echo has `start_ts`/`end_ts`). Output epochs may be negative for pre-1970 events. Both forms derive from one `datetime` at serialization time in `models.py`, so they can't disagree.
+  - **Consumer's job:** koda sends integer epoch seconds. The library never needs the consumer's time zone, and local-time presentation is the consumer's concern.
   - `end <= start` → `InvalidQueryError` / exit 2.
 - R13. Window span cap: EventKit's `predicateForEventsWithStartDate:endDate:calendars:` only matches events within a four-year span, so over-cap windows raise `InvalidQueryError` (CLI exit 2) instead of being silently truncated. The details:
   - **Limit:** the caller's window, measured **after** `--pad-minutes` padding, may be at most **4×365 − 2 days** long.
@@ -109,7 +111,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Fixtures are hand-written with RFC 2606 domains (`example.com`, `example.org`).
   - The live smoke test asserts on integer counts only.
   - `scripts/validate_json.py` prints only JSON paths and validator keywords, never values.
-  - `scripts/check_privacy.sh` (run in CI) scans the repository case-insensitively for email addresses outside RFC 2606 domains (including their subdomains) and GitHub noreply addresses. The exact scan set (tracked only, or tracked plus untracked-not-ignored) is Pending decision R2-1. Paths missing from the worktree are skipped.
+  - `scripts/check_privacy.sh` (run in CI) scans `git ls-files --cached --others --exclude-standard` (tracked plus untracked-not-ignored files) case-insensitively for email addresses outside RFC 2606 domains (including their subdomains) and GitHub noreply addresses. Paths missing from the worktree are skipped. There is **no exclusion list**, so local scratch files must be gitignored.
   - **No tracked file may contain a disallowed address-shaped literal.** Test seeds are built at runtime by string concatenation, and the plan describes seeds without address-shaped text.
   - Exit codes: 0 clean, 1 violation, 2 error (e.g. not a git repository).
 - R17. CI on GitHub Actions:
@@ -119,7 +121,13 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 
 ### Cross-repo contract (CLI + JSON)
 - R18. **CLI JSON contract.**
-  - **Schemas:** the stdout of `window` and `calendars` is specified by JSON Schemas shipped as **package data**: `src/macos_calendar_events/schema/window-v1.schema.json` and `calendars-v1.schema.json`, loaded via `importlib.resources`, so the CLI and tests read the same files. How out-of-process consumers obtain the schemas, and whether v1 fields added after v0.1.0 stay optional in the schema, is Pending decision R2-2. Each schema declares `$schema: https://json-schema.org/draft/2020-12/schema`, a stable `$id` (`https://github.com/vr000m/macos-calendar-events/schema/<name>-v1.json`) and `schema_version: {const: 1}`.
+  - **Schemas:** the stdout of `window` and `calendars` is specified by JSON Schemas shipped as **package data**: `src/macos_calendar_events/schema/window-v1.schema.json` and `calendars-v1.schema.json`, loaded via `importlib.resources`, so the CLI and tests read the same files. The packaged copy under `src/` is the **single source of truth**.
+  - **How consumers get the schemas:**
+    - The CLI prints them: `macos-calendar-events schema {window-v1|calendars-v1}` returns the schema of the *installed* version.
+    - Published copies in `docs/schema/window-v1.schema.json` and `docs/schema/calendars-v1.schema.json` let other coding agents and consumers build against the contract.
+    - `scripts/sync_schemas.py` copies the packaged files to `docs/schema/`, and `tests/test_schema_copies.py` asserts the docs copies are byte-identical to the packaged ones.
+    - Consumers validate against the installed CLI's `schema` output.
+  - **All v1 fields are required.** A field added in a later v1.x is required in that version's schema, and a consumer validating against the installed CLI's schema always sees a matching pair. Each schema declares `$schema: https://json-schema.org/draft/2020-12/schema`, a stable `$id` (`https://github.com/vr000m/macos-calendar-events/schema/<name>-v1.json`) and `schema_version: {const: 1}`.
   - **Envelopes** (all keys required): the window document is `{schema_version, window: {start, end}, events: [...]}`, where `window` echoes the padded caller window (not the ±1-day query range). The calendars document is `{schema_version, calendars: [...]}`. See `WindowDocument`/`CalendarsDocument` in the type sketch.
   - **Serialization:** UTF-8 with `ensure_ascii=False`, `sort_keys=True`, `indent=2` and a trailing newline. Datetimes are RFC 3339 with whole seconds (`timespec="seconds"`); raw timestamps are truncated to whole seconds at the `Raw*` boundary.
   - **Stability rules within v1:** fields may be **added** (consumers must ignore unknown keys), but none are removed, renamed, retyped, or changed in meaning. **Enums are open within v1:** a new enum value is an additive change. Schema enum fields are `type: string` with their known values listed in an `x-known-values` annotation and the field `description`, and consumers map unknown values to `unknown`. Any breaking change bumps `schema_version` to 2 with new schema files.
@@ -154,7 +162,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Whether a store created before the grant returns data after it.
 - **TCC attribution:** a CLI run from Terminal is attributed to the *responsible app* (Terminal, iTerm2, VS Code; cron or launchd → none). Because koda runs the CLI as a **subprocess**, attribution follows koda's own responsible process: a Terminal-launched koda, or a launchd agent with no app. The prompt needs `NSCalendarsFullAccessUsageDescription` in the responsible app's Info.plist. **This is the highest risk and is de-risked in Phase 0 before any design is frozen.**
 - **Completion-handler threading:** the completion block fires on an arbitrary queue. `_access.wait_for_access` blocks on `threading.Event` with a timeout; Phase 0 decides whether an `NSRunLoop` must be pumped.
-- **Time:** UTC-only input and output (R12); RFC 3339 `…Z` with whole seconds; DST transitions; floating (no-tz) events; all-day `start_date`/`end_date` exclusivity; ±1-day query widening (R13); `time_zone` passed through as informational, including non-IANA names such as `GMT+0530`.
+- **Time:** UTC-only input (integer epoch seconds or RFC 3339 `Z`/`+00:00`) and output (strings plus `_ts` epochs) (R12); RFC 3339 `…Z` with whole seconds; DST transitions; floating (no-tz) events; all-day `start_date`/`end_date` exclusivity; ±1-day query widening (R13); `time_zone` passed through as informational, including non-IANA names such as `GMT+0530`.
 - **Cross-repo contract:** JSON Schema draft 2020-12 with format checking, additive-only evolution within `schema_version` 1.
 - **Formats:** RFC 6068 (`mailto:`), RFC 3986 scheme case-insensitivity, RFC 2606 fixture domains.
 - **Overlap semantics** at boundaries, including zero-duration events.
@@ -196,7 +204,7 @@ sequenceDiagram
     participant S as EventKitSource
     participant T as tccd / calendaragent
     participant M as _mapping
-    K->>C: spawn `window --start <UTC> --end <UTC> --pad-minutes 15` (no --prompt; timeout)
+    K->>C: spawn `window --start <epoch> --end <epoch> --pad-minutes 15` (no --prompt; timeout)
     C->>A: query_events(get_source, start, end, calendars, include_notes, prompt)
     A->>M: validate_window(start, end)  (InvalidQueryError on naive / non-UTC / inverted / over cap → exit 2)
     A->>D: get_source() = default_source()
@@ -251,6 +259,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 - **Predicate edges:** over a real window, compare counts for events ending exactly at, starting exactly at, and zero-length on the window edges between a narrow query and a widened-then-filtered query (informational: the adapter widens by ±1 day regardless, R13).
 - **Shapes over a real ±7-day window** (counts only):
   - nil counts for `calendarItemExternalIdentifier`, `title`, `eventIdentifier`, `occurrenceDate`, `timeZone`, source title, `event.calendar`, `calendar.title`, `calendar.calendarIdentifier`, `startDate`, `endDate`, `organizer`, participant `URL` and `name`;
+  - counts of events that would be skipped under the R3 rule (nil `startDate`, `endDate` or calendar identifier);
   - duplicate counts of the R3 `id` base key, and whether occurrences and detached occurrences share `eventIdentifier`;
   - floating (no `timeZone`) timed events, counted;
   - `timeZone` names that `zoneinfo.ZoneInfo` rejects;
@@ -266,8 +275,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - `EKSourceType` values seen.
 - **Exit checklist (Phase 0 is done only when all hold):**
   - every bullet above has a recorded result in `## Findings` (Phase 0);
-  - where Phase 0 results are recorded, and whether recording them forces re-review, is Pending decision R2-4 (current text: each design consequence is written into `## Decisions` as `Decision (Phase 0): …`);
-  - if any consequence changes the contract above the marker, the plan is updated via `/dev-plan update` and `/review-plan` re-runs before Phase 1;
+  - measurements are recorded in `## Findings` below the marker. `## Decisions` and the contract above the marker are edited (via `/dev-plan update`) **only when a result forces a contract change**. Phase 0 runs **before** the final `/review-plan`: after Phase 0, one `/review-plan` runs, then `/conduct`;
   - the architecture-reopen criteria are checked explicitly. **Stop and re-plan the CLI-subprocess architecture only if** (a) the CLI launched under a launchd-started parent can't reach `full_access` by any documented user step (granting from Terminal, or adding the executable in Privacy settings, if Phase 0's System Settings check shows that's possible), or (b) the permission completion callback never fires even with the run loop pumped. Every other Phase 0 result updates Phases 2–4 via `/dev-plan update`, followed by a fresh `/review-plan`.
   - `Phase 0` is ticked in `## Progress`;
   - the spike is deleted in a second human-run Phase 0 commit, after the findings commit, so Phase 1 starts from a tree that passes `ruff check .` and the privacy gate.
@@ -306,21 +314,21 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - a selector missing from the allowlist → `[allowlist]`; a stale allowlist entry that the code no longer uses → `[allowlist]`;
   - `import EventKit`, `from EventKit import X` and `import objc` in a non-`_eventkit.py` module → `[imports]`; a comment mentioning pyobjc passes;
   - an unreadable file (`chmod 000`) isolates grep exit 2 → `[grep-error]`; `src/` missing → non-zero;
-  - `check_privacy.sh` (every seed address is assembled at runtime from parts, so no disallowed literal exists in any tracked file): a non-RFC-2606 address with an uppercase domain → 1; near-miss domains (a look-alike of `example.com`, and `example.com` used as a prefix of another domain) → 1; an RFC 2606 subdomain address and a GitHub noreply address → 0; a non-git directory → 2; untracked-file behavior per Pending decision R2-1;
+  - `check_privacy.sh` (every seed address is assembled at runtime from parts, so no disallowed literal exists in any tracked file): a non-RFC-2606 address with an uppercase domain → 1; near-miss domains (a look-alike of `example.com`, and `example.com` used as a prefix of another domain) → 1; an RFC 2606 subdomain address and a GitHub noreply address → 0; a non-git directory → 2; an untracked, not-ignored file holding a disallowed address → 1; the same file gitignored → 0; a tracked file deleted from the worktree is skipped (exit 0);
   - **self-test over the real repository:** `check_privacy.sh` run on the actual checkout exits 0.
 - CI per R17 (macOS 3.11 and 3.13 run the full gate; ubuntu 3.12 runs `uv run pytest -m "not live"`).
 
 ### Phase 2: Domain types, JSON serialization and schemas
 
-**Impl files:** `src/macos_calendar_events/models.py, src/macos_calendar_events/errors.py, src/macos_calendar_events/schema/window-v1.schema.json, src/macos_calendar_events/schema/calendars-v1.schema.json`
-**Test files:** `tests/test_models.py, tests/test_schemas.py`
-**Test command:** `uv run pytest tests/test_models.py tests/test_schemas.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
+**Impl files:** `src/macos_calendar_events/models.py, src/macos_calendar_events/errors.py, src/macos_calendar_events/schema/window-v1.schema.json, src/macos_calendar_events/schema/calendars-v1.schema.json, docs/schema/window-v1.schema.json, docs/schema/calendars-v1.schema.json, scripts/sync_schemas.py`
+**Test files:** `tests/test_models.py, tests/test_schemas.py, tests/test_schema_copies.py`
+**Test command:** `uv run pytest tests/test_models.py tests/test_schemas.py tests/test_schema_copies.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
 **Goal:** The public data shape is fixed and serializes to one stable JSON form. One module owns serialization and `SCHEMA_VERSION`.
 
 - Frozen, slotted dataclasses and `StrEnum`s per the type sketch. Collections are tuples.
 - `models.py` owns `SCHEMA_VERSION = 1`, `window_to_json(events, *, window) -> str` and `calendars_to_json(calendars) -> str`, both using the R18 serialization rules (sort_keys, indent 2, `ensure_ascii=False`, trailing newline, `timespec="seconds"`). Keys are always present, with `None` as `null`.
 - Errors: base `MacosCalendarEventsError`; `CalendarAccessError(status: AccessStatus)`, `CalendarNotFoundError(selectors, available_titles)`, `EventKitUnavailableError`, and `InvalidQueryError(MacosCalendarEventsError, ValueError)` for window and `calendars=[]` errors. `InvalidQueryError` is the only `ValueError` the CLI maps to exit 2.
-- Write both JSON Schemas by hand from the type sketch: `$schema`, `$id`, `schema_version: {const: 1}`, required keys, types, nullability per R3, `color_hex` pattern `^#[0-9A-F]{6}$`, `date-time` formats, `additionalProperties: true`. Enum fields are open: `type: string` plus `x-known-values: [...]` and a `description` listing the values (R18). `start_date`/`end_date` use `format: date`, and every instant uses `format: date-time` with `pattern` `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`. Both envelopes are specified per `WindowDocument`/`CalendarsDocument`.
+- Write both JSON Schemas by hand from the type sketch: `$schema`, `$id`, `schema_version: {const: 1}`, required keys, types, nullability per R3, `color_hex` pattern `^#[0-9A-F]{6}$`, `date-time` formats, `additionalProperties: true`. Enum fields are open: `type: string` plus `x-known-values: [...]` and a `description` listing the values (R18). `start_date`/`end_date` use `format: date`, and every instant uses `format: date-time` with `pattern` `^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$`. Both envelopes are specified per `WindowDocument`/`CalendarsDocument`. Every instant string has a required `type: integer` `<name>_ts` sibling, with no minimum, because output may be pre-1970. Run `uv run python scripts/sync_schemas.py` after any schema edit to refresh `docs/schema/`.
 - `tests/test_models.py`:
   - hand-written expected dicts derived from the spec (not from calling the code);
   - a non-ASCII title serializes unescaped;
@@ -336,7 +344,9 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - each of the five output enums (`EventStatus`, `ParticipationStatus`, `ParticipantRole`, `ParticipantType`, `SourceType`) has values equal to its field's `x-known-values`; `AccessStatus` is excluded because no schema field carries it. A document with an unknown enum string still validates;
   - an instant with `+02:00` instead of `Z` fails validation;
   - envelope `required` keys equal `WindowDocument`/`CalendarsDocument` in the type sketch;
-  - a document with `organizer: null` and `self_status: null` validates.
+  - a document with `organizer: null` and `self_status: null` validates;
+  - every `<name>_ts` equals the epoch of its `<name>` string (hand-written fixture), and a document missing a `_ts` field fails;
+  - `tests/test_schema_copies.py`: each `docs/schema/*.json` is byte-identical to its packaged copy under `src/macos_calendar_events/schema/`.
 
 ### Phase 3: Pure core (mapping, access gate, window, selection) against a fake source
 
@@ -348,7 +358,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 - `_raw.py`: the `EventSource` Protocol and the `RawCalendar` / `RawEvent` / `RawParticipant` records:
   - plain Python: raw `timeIntervalSince1970` floats (normalized to whole-second UTC in `_mapping.epoch_to_utc`), local date-time components for all-day events, raw EventKit enum **ints** (including authorization status), strings, `None`. Fields are enumerated in the type sketch;
   - `color_rgb: tuple[float, float, float] | None` already converted to sRGB by the adapter.
-- `_mapping.py`: `access_status_from_int`, `source_type_from_int`, `event_status_from_int`, role/status/type tables (unknown int → `UNKNOWN`), `parse_mailto`, `rgb_to_hex`, `validate_window`, `query_range`, `epoch_to_utc`, `normalize_all_day`, `assign_ids`, `select_calendars`, `overlaps`, `map_participant`, `map_calendar`, `map_event`, `to_events` (map → overlap filter → sort), `to_calendars` (map → sort).
+- `_mapping.py`: `access_status_from_int`, `source_type_from_int`, `event_status_from_int`, role/status/type tables (unknown int → `UNKNOWN`), `parse_mailto`, `rgb_to_hex`, `parse_instant`, `parse_instant_text`, `validate_window`, `query_range`, `epoch_to_utc`, `normalize_all_day`, `assign_ids`, `select_calendars`, `overlaps`, `map_participant`, `map_calendar`, `map_event`, `to_events` (map → overlap filter → sort), `to_calendars` (map → sort).
 - `_access.py`: `wait_for_access(request: Callable[[Callable[[bool, object | None], None]], None], read_status: Callable[[], int], timeout: float, wait: Callable[[threading.Event, float], bool] = threading.Event.wait) -> int`, built on a stdlib `threading.Event`. The injected `wait` is the run-loop seam.
 - `_api.py`: `ACCESS_TIMEOUT_S = 60.0`; `query_events(get_source, start, end, *, calendars, include_notes, prompt)` and `query_calendars(get_source, *, prompt)` run validate (R11 order) → `get_source()` → access gate (R9) → select → `query_range` → fetch → map. It also provides `authorization_status(get_source)` and `request_access(get_source, timeout)` for the public wrappers.
 - Named fixture-driven tests, each asserting observable output:
@@ -367,6 +377,8 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - **self rows:** zero `is_self` attendees → `self_status is None`; two → the first in order wins.
   - **attendees:** non-mailto URL → `email=None`, `url` kept; mailto → `url is None`; no name → `name=None`; organizer-only → `attendees == ()`; room → `type == ROOM`.
   - **nulls:** nil `title`, `event_identifier`, `external_id` → `null` in output, and `id` still unique.
+  - **skips (R3):** raw events with a nil start, end or calendar id are not emitted, and `to_events` reports a skip count equal to their number; an event with nil `occurrenceDate` is kept (`occurrence_start == start`).
+  - **instants (`parse_instant`, `parse_instant_text`):** `1763568000` and `"1763568000"` → the same UTC datetime as `2025-11-19T16:00:00Z`; `+00:00` accepted; fractional RFC 3339 seconds truncated; rejected with `InvalidQueryError`: `-1`, `"-1"`, `1.5`, `"1.5"`, `True`, naive, `-00:00`, `+05:30`, date-only, and an out-of-range epoch.
   - **id collisions:** two events in one calendar with the same start and both identifiers nil → distinct ids (one gets the `-2` suffix), identical across two calls.
   - **same invite in two calendars** → two rows, distinct `id`.
   - **mailto (`tests/test_mailto.py`):** `mailto:a@example.com`, `MAILTO:a@example.com`, `mailto:a%40example.com`, `mailto:a@example.com?subject=x`, bare `mailto:` → `None`, `mailto:a@example.com,b@example.com` → first; `mailto:?to=a@example.com` → `a@example.com`; `mailto:a%2Cb@example.com` → `a,b@example.com` (split before decoding); `mailto:%20a@example.com%20` → trimmed.
@@ -416,7 +428,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - `calendar_ids=["missing"]` → `[]`, with no predicate call;
   - darwin-only conversions against real Foundation objects (no TCC grant needed): an `NSDate` with fractional seconds and a pre-1970 `NSDate` → the expected raw floats; a non-RGB `NSColor` → sRGB floats or `None`; local components for a stub all-day event.
 - `tests/test_platform_guard.py`: a stub store class without the 14+ selector → `EventKitUnavailableError` whose message includes the version string; with the selector → a source; non-darwin (monkeypatched `sys.platform`) → `EventKitUnavailableError`; blocked `EventKit` import → `EventKitUnavailableError`.
-- Live smoke (`@pytest.mark.live`, skipped unless `MACOS_CALENDAR_EVENTS_LIVE=1` **and** darwin), over now ± 7 days: compute violation **counts** (non-aware datetimes, `start > end`, non-overlapping rows, empty ids, duplicate ids, JSON or schema failures) and assert each equals 0; `len(list_calendars()) > 0`. Print only counts. The live calls are wrapped in `try/except Exception as exc`, which fails with `type(exc).__name__` only (`raise … from None`), so no message or traceback carrying calendar data reaches the output. Schema errors are counted via `iter_errors` and never formatted. Extra counts: all-day rows with null dates, `end_date <= start_date`, and timed rows with non-null dates. A non-live test feeds the smoke helper a fake that raises with a sentinel string, and asserts the sentinel is absent from captured output.
+- Live smoke (`@pytest.mark.live`, skipped unless `MACOS_CALENDAR_EVENTS_LIVE=1` **and** darwin), over now ± 7 days: compute violation **counts** (non-aware datetimes, `start > end`, non-overlapping rows, empty ids, duplicate ids, JSON or schema failures) and assert each equals 0; `len(list_calendars()) > 0`. Print only counts. The live calls are wrapped in `try/except Exception as exc`, which fails with `type(exc).__name__` only (`raise … from None`), so no message or traceback carrying calendar data reaches the output. Schema errors are counted via `iter_errors` and never formatted. Extra counts: rows skipped by `to_events` (R3), all-day rows with null dates, `end_date <= start_date`, and timed rows with non-null dates. A non-live test feeds the smoke helper a fake that raises with a sentinel string, and asserts the sentinel is absent from captured output.
 - `tests/test_public_api.py`: monkeypatch `default_source` to return a recording `FakeSource`; assert argument forwarding, the defaults `include_notes=False` and `prompt=True`, that `authorization_status()` and `request_access()` return `AccessStatus`, and the re-exported names.
 
 ### Phase 5: CLI and contract tests
@@ -436,9 +448,9 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 
 - `main(argv: Sequence[str] | None = None, *, source: EventSource | None = None) -> int` calls `_api.query_events(get_source, …)` with `get_source = (lambda: source) if source is not None else default_source`. `source` is the test seam and isn't a CLI flag. The module ends with `if __name__ == "__main__": sys.exit(main())`.
 - A catch-all handler maps unexpected exceptions to exit 1 with a one-line class-only message. Exit 2 is mapped only from argparse and `InvalidQueryError`. Exit 5's line names only the unmatched selectors, via `repr()`. stdout is written once, as UTF-8 bytes to `sys.stdout.buffer`, after serialization succeeds.
-- `window`: `--start`, `--end` (ISO 8601 UTC only: `Z` or `+00:00`, R12), `--calendar` (repeatable), `--pad-minutes N` (int ≥ 0, widens both ends before cap validation), `--include-notes`, `--prompt`. Output: `window_to_json` with the padded window echoed. `calendars`: `calendars_to_json`. `--version`.
+- `window`: `--start`, `--end` (non-negative integer epoch seconds, or RFC 3339 UTC ending `Z`/`+00:00`; R12), `--calendar` (repeatable), `--pad-minutes N` (int ≥ 0, widens both ends before cap validation), `--include-notes`, `--prompt`. Output: `window_to_json` with the padded window echoed. `calendars`: `calendars_to_json`. `schema <name>`: writes the packaged schema bytes. `--version`.
 - `scripts/validate_json.py <schema-name>`: loads the packaged schema, validates stdin with the format checker, prints only the JSON path and keyword on failure, and exits non-zero. `tests/test_validate_json.py` feeds an invalid document containing a sentinel string and asserts the sentinel is absent from output. It also covers empty stdin and non-JSON stdin (non-zero exit, nothing echoed, sentinel absent from stdout and stderr) and a pattern-valid but format-invalid instant (keyword `format`).
-- `scripts/regen_goldens.py` writes `tests/golden/*.json` from the `tests/golden_fixtures.py` builders (which include a non-ASCII title and a `--pad-minutes 15` window). Workflow: run `uv run python scripts/regen_goldens.py`, hand-review the diff against Phase 2's hand-written expected values and the spec, add a `CHANGELOG.md` line, then commit (R18).
+- `scripts/regen_goldens.py` writes `tests/golden/*.json` from the `tests/golden_fixtures.py` builders (which include a non-ASCII title and a `--pad-minutes 15` window). Goldens therefore carry every `_ts` field, and the window golden is produced from epoch-seconds input. Workflow: run `uv run python scripts/regen_goldens.py`, hand-review the diff against Phase 2's hand-written expected values and the spec, add a `CHANGELOG.md` line, then commit (R18).
 - `tests/test_cli_contract.py` (R18):
   - `main([...], source=FakeSource(fixed fixtures))` stdout validates against the schema and equals the golden file byte for byte;
   - every error exit leaves stdout empty;
@@ -453,7 +465,8 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - `default_source` monkeypatched to raise `EventKitUnavailableError` → exit 4, one stderr line, empty stdout; a non-darwin subprocess running `python -m macos_calendar_events.cli calendars` → exit 4 (ubuntu CI); an inverted window on non-darwin → exit 2 (R11 order);
   - `FakeSource` raising `RuntimeError` with a sentinel message → exit 1, stderr exactly `internal error: RuntimeError`, sentinel absent;
   - exit 5 with a newline inside a selector → exactly one stderr line;
-  - one test per input form, each with its expected exit code: `…Z`, `…+00:00`, fractional `…T12:00:00.5Z` (accepted and truncated), naive, `+05:30`, date-only, and `-00:00` (per Q-a).
+  - one test per input form, each with its expected exit code: epoch `1763568000` → 0; `…Z` → 0; `…+00:00` → 0; fractional `…T12:00:00.5Z` → 0 (truncated); naive → 2; `+05:30` → 2; date-only → 2; `-00:00` → 2; float epoch `1763568000.5` → 2; negative epoch `-1` → 2. Also: `window --start 1763568000 --end 1763571600` and `window --start 2025-11-19T16:00:00Z --end 2025-11-19T17:00:00Z` produce **byte-identical** stdout;
+  - `schema window-v1` / `schema calendars-v1` stdout is byte-identical to the packaged files; `schema nope` → 2 with empty stdout;
   - `end <= start` → 2;
   - UTC input (R12): `Z` and `+00:00` are accepted; a naive value and `+05:30` each exit 2 with the one-line UTC message and empty stdout; output instants all end in `Z`;
   - an old absolute window (`--start 2025-01-06T17:00:00Z --end 2025-01-06T18:00:00Z`) and a 6-week window both exit 0 with the fixture events.
@@ -466,7 +479,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 **Impl files:** `README.md, CHANGELOG.md`
 **Test files:** (none)
 **Test command:** `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
-**Validation cmd:** `uv build && uvx --from dist/*.whl macos-calendar-events --version && uv run --no-project --with dist/*.whl python -c "import importlib.resources as r; p = r.files('macos_calendar_events'); assert (p / 'py.typed').is_file(); [(p / 'schema' / n).read_text() for n in ('window-v1.schema.json', 'calendars-v1.schema.json')]" && test "$(unzip -p dist/*.whl '*.dist-info/METADATA' | grep -cE '^(License-Expression: BSD-2-Clause|Requires-Python: >=3\.11|Requires-Dist: pyobjc-framework-eventkit.*sys_platform == .darwin.)$')" = 3 && uv tool install --force . && ~/.local/bin/macos-calendar-events --version`
+**Validation cmd:** `uv build && uvx --from dist/*.whl macos-calendar-events --version && uv run --no-project --with dist/*.whl python -c "import importlib.resources as r; p = r.files('macos_calendar_events'); assert (p / 'py.typed').is_file(); [(p / 'schema' / n).read_text() for n in ('window-v1.schema.json', 'calendars-v1.schema.json')]" && test "$(unzip -p dist/*.whl '*.dist-info/METADATA' | grep -cE '^(License-Expression: BSD-2-Clause|Requires-Python: >=3\.11|Requires-Dist: pyobjc-framework-eventkit.*sys_platform == .darwin.)$')" = 3 && uvx --from dist/*.whl macos-calendar-events schema window-v1 | cmp - docs/schema/window-v1.schema.json && uvx --from dist/*.whl macos-calendar-events schema calendars-v1 | cmp - docs/schema/calendars-v1.schema.json`
 **Goal:** A stranger can install it, grant permission, and run it from the README alone. Every README command is executed verbatim on the Mac before this phase is marked done, except `tccutil reset` (it revokes the grant) and the pinned-tag `uv tool install …@v0.1.0` (the tag doesn't exist until after merge).
 
 - README sections:
@@ -474,15 +487,15 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - **requirements: macOS 14 Sonoma+**;
   - install: `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0`, with the CLI landing in `~/.local/bin`, and a note that launchd's PATH lacks `~/.local/bin`, so callers should use the absolute path;
   - permission walkthrough: the generic responsible-app explanation, the System Settings path, the one-time grant via `macos-calendar-events calendars --prompt` run from Terminal, and how to reset during development with `tccutil reset Calendar <bundle-id>` (run by the user, never by the tool);
-  - **"Integrating from another program" (primary):** absolute-path subprocess call with a timeout, the R18 stability rules and the "any failure = no hints" rule, a link to the packaged schemas, UTC-only input (convert session times to UTC before calling), the dedupe key `(external_id, occurrence_start)` when `external_id` is non-null (provisional per Phase 0), and the fact that `id` is opaque;
+  - **"Integrating from another program" (primary):** absolute-path subprocess call with a timeout, the R18 stability rules and the "any failure = no hints" rule, the `schema` subcommand and a link to `docs/schema/`, epoch-seconds input (koda sends integer epoch seconds; RFC 3339 `Z`/`+00:00` is also accepted), the `_ts` output fields, the dedupe key `(external_id, occurrence_start)` when `external_id` is non-null (provisional per Phase 0), and the fact that `id` is opaque;
   - CLI examples; Python API example (secondary); exit codes (R11, including 1);
   - known limitations: hidden calendars, delegate calendars if applicable, the R13 cap, external-id caveats, floating times, non-IANA zone names;
   - privacy note; BSD-2-Clause.
 - The `v0.1.0` tag that the install command pins is created by the user on `main` after merge (user-run; pushing a tag is the user's call). Until then, README examples are validated with `uv tool install --force .` from the checkout.
-- Whether the `uv tool install --force .` part of the Validation cmd (which writes to `~/.local/bin`) stays automated or becomes a user-run step is Pending decision Q-b.
+- **Manual (user-run; never automated, because it writes to `~/.local/bin`):** `uv tool install --force . && ~/.local/bin/macos-calendar-events --version`.
 - **Manual (user-run):** after `uv tool install --force .`, run the installed `~/.local/bin/macos-calendar-events` from a user launchd agent by absolute path (no `--prompt`, no preflight). Record exit code and status in Findings.
 - **Post-tag check (user-run):** once `v0.1.0` exists, run the README's pinned install command once and record the result.
-- A short consumer snippet: `CLI_PATH = os.environ.get("KODA_CALENDAR_CLI", os.path.expanduser("~/.local/bin/macos-calendar-events"))`; `subprocess.run([CLI_PATH, "window", "--start", t0_utc, "--end", t1_utc, "--pad-minutes", "15"], capture_output=True, timeout=10)`, with `FileNotFoundError`/`TimeoutExpired`/non-zero/`json.JSONDecodeError` all mapped to "no hints", then a `schema_version` check, dedupe on `(external_id, occurrence_start)` for non-null `external_id`, and reconcile in your own code.
+- A short consumer snippet: `CLI_PATH = os.environ.get("KODA_CALENDAR_CLI", os.path.expanduser("~/.local/bin/macos-calendar-events"))`; `subprocess.run([CLI_PATH, "window", "--start", str(int(t0.timestamp())), "--end", str(int(t1.timestamp())), "--pad-minutes", "15"], capture_output=True, timeout=10)`, with `FileNotFoundError`/`TimeoutExpired`/non-zero/`json.JSONDecodeError` all mapped to "no hints", then a `schema_version` check, dedupe on `(external_id, occurrence_start)` for non-null `external_id`, and reconcile in your own code.
 
 ## Technical Specifications
 
@@ -502,6 +515,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 - `src/macos_calendar_events/cli.py`: argparse CLI.
 - `src/macos_calendar_events/schema/window-v1.schema.json`, `src/macos_calendar_events/schema/calendars-v1.schema.json`: the cross-repo JSON contract (R18), shipped as package data.
 - `src/macos_calendar_events/py.typed`
+- `docs/schema/window-v1.schema.json`, `docs/schema/calendars-v1.schema.json`: published byte-identical copies of the packaged schemas (packaged copy is the source of truth); `scripts/sync_schemas.py` refreshes them.
 - `tests/fakes.py`, `tests/test_*.py`, `tests/golden/*.json`: fakes, tests, goldens (fictional data only).
 - `scripts/check_readonly.sh`, `scripts/eventkit_selectors.allow`, `scripts/check_privacy.sh`, `scripts/validate_json.py`, `scripts/regen_goldens.py`; `scripts/spike_eventkit.py` (Phase 0 only, deleted in Phase 1).
 - `.github/workflows/ci.yml`, `CHANGELOG.md`.
@@ -527,11 +541,11 @@ class Participant:
 
 @dataclass(frozen=True, slots=True)
 class CalendarRef:
-    id: str; title: str; source_title: str | None
+    id: str; title: str | None; source_title: str | None
 
 @dataclass(frozen=True, slots=True)
 class CalendarInfo:
-    id: str; title: str; source_title: str | None; source_type: SourceType
+    id: str; title: str | None; source_title: str | None; source_type: SourceType
     color_hex: str | None   # "#RRGGBB" (sRGB) or None
     read_only: bool         # not allowsContentModifications
     def to_dict(self) -> dict[str, object]: ...
@@ -542,21 +556,21 @@ class Event:
     external_id: str | None         # calendarItemExternalIdentifier
     event_identifier: str | None    # EKEvent.eventIdentifier; shared by occurrences of a series
     title: str | None
-    start: datetime; end: datetime  # UTC; end exclusive; whole seconds; serialized …Z
+    start: datetime; end: datetime  # UTC; end exclusive; whole seconds; serialized as …Z string + start_ts/end_ts int
     all_day: bool
     start_date: date | None; end_date: date | None   # all-day only; end exclusive; computed in the adapter
     time_zone: str | None           # informational: IANA when available, else raw EventKit name; None = floating
     location: str | None; url: str | None; notes: str | None
     status: EventStatus
     is_recurring: bool; is_detached: bool
-    occurrence_start: datetime      # occurrenceDate, falling back to start
+    occurrence_start: datetime      # occurrenceDate, falling back to start; serialized + occurrence_start_ts
     organizer: Participant | None
     attendees: tuple[Participant, ...]
     self_status: ParticipationStatus | None
     calendar: CalendarRef
     def to_dict(self) -> dict[str, object]: ...
 
-class WindowEcho(TypedDict): start: str; end: str        # padded caller window, UTC …Z
+class WindowEcho(TypedDict): start: str; end: str; start_ts: int; end_ts: int   # padded caller window
 class WindowDocument(TypedDict): schema_version: Literal[1]; window: WindowEcho; events: list[dict[str, object]]
 class CalendarsDocument(TypedDict): schema_version: Literal[1]; calendars: list[dict[str, object]]
 
@@ -569,13 +583,13 @@ class RawParticipant:
     name: str | None; url: str | None; role: int; status: int; type: int; is_current_user: bool
 @dataclass(frozen=True, slots=True)
 class RawCalendar:
-    id: str; title: str; source_title: str | None; source_type: int
+    id: str; title: str | None; source_title: str | None; source_type: int
     color_rgb: tuple[float, float, float] | None; allows_modifications: bool
 @dataclass(frozen=True, slots=True)
 class RawEvent:
-    calendar_id: str
+    calendar_id: str | None                                   # nil → row skipped in _mapping (R3)
     external_id: str | None; event_identifier: str | None; title: str | None
-    start_epoch: float; end_epoch: float; occurrence_epoch: float | None
+    start_epoch: float | None; end_epoch: float | None; occurrence_epoch: float | None   # nil start/end → skipped
     all_day: bool
     start_local: tuple[int, int, int, int, int, int] | None   # all-day only: (Y, M, D, h, m, s) in the system zone
     end_local: tuple[int, int, int, int, int, int] | None
@@ -605,19 +619,22 @@ def validate_window(start: datetime, end: datetime) -> None: ...          # awar
 def query_range(start: datetime, end: datetime) -> tuple[datetime, datetime]: ...  # (start - 1 day, end + 1 day)
 def select_calendars(cals: Sequence[RawCalendar], selectors: Sequence[str] | None) -> list[RawCalendar]: ...
 def overlaps(ev_start: datetime, ev_end: datetime, w_start: datetime, w_end: datetime) -> bool: ...
-def to_events(raw: Sequence[RawEvent], window: tuple[datetime, datetime], *, include_notes: bool) -> list[Event]: ...
+class MappedEvents(NamedTuple): events: list[Event]; skipped: int
+def to_events(raw: Sequence[RawEvent], window: tuple[datetime, datetime], *, include_notes: bool) -> MappedEvents: ...
+def parse_instant(value: datetime | int) -> datetime: ...              # int epoch ≥ 0 or aware UTC datetime; else InvalidQueryError
+def parse_instant_text(text: str) -> datetime: ...                    # CLI: ^[0-9]+$ epoch or RFC 3339 Z/+00:00
 def to_calendars(raw: Sequence[RawCalendar]) -> list[CalendarInfo]: ...
 
 # _api.py
 ACCESS_TIMEOUT_S: Final = 60.0
-def query_events(get_source: Callable[[], EventSource], start: datetime, end: datetime, *,
+def query_events(get_source: Callable[[], EventSource], start: datetime | int, end: datetime | int, *,
                  calendars: Sequence[str] | None, include_notes: bool, prompt: bool) -> list[Event]: ...
 def query_calendars(get_source: Callable[[], EventSource], *, prompt: bool) -> list[CalendarInfo]: ...
 def authorization_status(get_source: Callable[[], EventSource]) -> AccessStatus: ...
 def request_access(get_source: Callable[[], EventSource], timeout: float) -> AccessStatus: ...
 
 # __init__.py  (public; thin wrappers over _api with default_source())
-def events_in_window(start: datetime, end: datetime, *, calendars: Sequence[str] | None = None,
+def events_in_window(start: datetime | int, end: datetime | int, *, calendars: Sequence[str] | None = None,
                      include_notes: bool = False, prompt: bool = True) -> list[Event]: ...
 def list_calendars(*, prompt: bool = True) -> list[CalendarInfo]: ...
 def authorization_status() -> AccessStatus: ...
@@ -634,7 +651,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - **macOS 14+ only, by feature detection:** one permission API, no deprecated code path, nothing untested.
 - **Reject rather than chunk over-cap windows** (subtract before you add; no observed need).
 - **Prompting:** the library defaults to `prompt=True` for interactive Python users. The CLI prompts only with `--prompt`, because its main caller is a non-interactive subprocess with a 10 s timeout, and a prompt that can wait 60 s would guarantee a timeout under launchd.
-- **UTC-only boundary (user override):** input and output are UTC, so goldens are byte-stable on any machine, the library never needs the consumer's time zone, and no zone-name lookup can fail.
+- **UTC-only boundary (user override, extended in round 2):** input (epoch seconds or RFC 3339 UTC) and output (`…Z` plus `_ts` epochs) are UTC, so goldens are byte-stable on any machine, the library never needs the consumer's time zone, and no zone-name lookup can fail.
 - **Open enums:** Apple adds EventKit enum values (e.g. `FullAccess`/`WriteOnly` in macOS 14); open enums keep such additions within v1.
 - **Fresh store after grant, never `reset`:** safe whichever way Phase 0's store comparison comes out, and it keeps `reset` on the banned list.
 - **`notes` opt-in:** notes often carry dial-in codes and passcodes. koda passes `--include-notes` when it wants them for meeting matching.
@@ -656,7 +673,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 | Access wait | `_access.py` (P3) | `_eventkit.py` (P4) | Returns a raw status int within `timeout`, whether or not the completion fires; the waiter is injectable (run-loop seam) |
 | Access gate | `_api.py` (P3) | `__init__` (P4), `cli.py` (P5) | Raises `CalendarAccessError(status)` unless `full_access`; requests at most once per call, and only when `prompt=True`; timeout `ACCESS_TIMEOUT_S = 60.0` |
 | JSON schema v1 | `models.py` + `src/macos_calendar_events/schema/*.json` (P2) | CLI (P5), koda-pipecat (external) | Keys always present; RFC 3339 whole-second datetimes; UTF-8, `ensure_ascii=False`, sorted keys; additive-only within v1, open enums; `schema_version` bumps on any breaking change (R18) |
-| CLI subprocess | `cli.py` (P5) | koda-pipecat (external) | UTC-only `--start`/`--end`; invoked by absolute path (`uv tool install …@v0.1.0`; `KODA_CALENDAR_CLI`); args per R7; stdout validates against v1 schema; exit codes per R11; stdout empty on error; consumer applies timeout and treats any failure as "no hints" |
+| CLI subprocess | `cli.py` (P5) | koda-pipecat (external) | `--start`/`--end` as epoch seconds or RFC 3339 UTC; `schema` subcommand; invoked by absolute path (`uv tool install …@v0.1.0`; `KODA_CALENDAR_CLI`); args per R7; stdout validates against v1 schema; exit codes per R11; stdout empty on error; consumer applies timeout and treats any failure as "no hints" |
 
 ## Testing Notes
 
@@ -694,6 +711,9 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 | Null `source_title` ordering | Phase 3 |
 | mailto hfields and encoded commas | Phase 3 |
 | Exit-code precedence (2 before 4) | Phase 5 |
+| Epoch vs RFC 3339 input equivalence; negative/float epoch; `-00:00` | Phases 3 and 5 |
+| Skipped nil-start/end/calendar rows | Phases 3 and 4 |
+| `schema` subcommand and docs copies | Phases 2, 5 and 6 |
 | Raising library during live smoke | Phase 4 |
 | Non-ASCII output | Phases 2 and 5 |
 | Sub-second timestamps | Phase 2 |
@@ -709,7 +729,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - **Risk: PyObjC/macOS version drift.** *Mitigation:* macOS 14 floor via feature detection, a tested PyObjC floor, CI on `macos-latest`, and a darwin-only test pinning EventKit constants.
 - **Risk: contract drift between repos.** *Mitigation:* R18 schemas with format checking, schema-model sync tests, goldens, `schema_version` checked by koda.
 - **Risk: privacy leaks through test or validation failures.** *Mitigation:* count-only live assertions, a value-free `validate_json.py`, `check_privacy.sh` in CI.
-- **Open questions:** six round-2 decisions (R2-1–R2-4, Q-a, Q-b) are pending a `/grill`; see "Pending grill (round 2)" below the marker. Contract text marked "Pending decision …" is finalized when they're resolved.
+- **Open questions:** none. Round-2 decisions were resolved via `/grill` on 2026-11-19 (see Decisions). Next: the user runs Phase 0, then one final `/review-plan`.
 
 ## Decisions
 
@@ -727,19 +747,25 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - Decision (grilled): D7. One cached source per process; lazy store; a fresh store after a request that returns full access; `reset` is never called. Phase 0 may relax this to a single store. → R10, Phases 1/4, Architecture Decisions.
 - Decision (grilled): D8. Goldens are generated by `scripts/regen_goldens.py`, hand-reviewed, with a CHANGELOG line on change. This is stated as the single exception; Phase 2's hand-written expected values remain the independent check. → R18, Phases 1/5, Testing Notes.
 - Decision (grilled): D9. Install via `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0`. koda reads the absolute path from config/env (e.g. `KODA_CALENDAR_CLI`, default `~/.local/bin/macos-calendar-events`), and `FileNotFoundError` → no hints. launchd's PATH lacks `~/.local/bin`. → R18, Phase 6, seams.
+- Decision (grilled): R2-4. Phase 0 (human-run spike) runs now, before the final review. Measurements go to `## Findings` below the marker; the contract and `## Decisions` are edited only when a result forces it; then one `/review-plan` runs before `/conduct`. → Phase 0 exit checklist.
+- Decision (grilled): R2-3. Events missing `start`, `end`, `calendar.id` (or `occurrence_start`, which falls back to `start`) are skipped, and skips are counted in Phase 0 and the live smoke. `calendar.title` is nullable now. → R2, R3, type sketch, Phases 0/3/4.
+- Decision (grilled): R2-2. `macos-calendar-events schema {window-v1|calendars-v1}` prints the packaged schema, and all v1 fields are required. Copies are also published at `docs/schema/window-v1.schema.json` and `docs/schema/calendars-v1.schema.json` for other coding agents and consumers. The packaged copy under `src/` is the single source of truth; `scripts/sync_schemas.py` refreshes the docs copies, and a test asserts they're byte-identical. The README links `docs/schema/`. → R7, R18, Phases 2/5/6, Files.
+- Decision (grilled): R2-1. The privacy scan covers `git ls-files --cached --others --exclude-standard`, skips paths missing from the worktree, and has no exclusion list; local scratch must be gitignored. → R16, Phase 1.
+- Decision (grilled): Q-a (user override/extension). CLI `--start`/`--end` accept either a non-negative integer of Unix epoch seconds or RFC 3339 ending `Z`/`+00:00`. Everything else (`-00:00`, naive, other offsets, floats, negative epochs) → exit 2. koda sends epoch seconds. The Python API accepts an `int` epoch or a tz-aware UTC `datetime`, rejecting naive or non-zero offsets. Output: every instant also gets a required integer epoch field (`start_ts`, `end_ts`, `occurrence_start_ts`, and the echoed padded window's `start_ts`/`end_ts`). → R7, R12, R18, schemas, type sketch, goldens, Phases 2/3/5/6, README.
+- Decision (grilled): Q-b. `uv tool install --force .` is a user-run manual step; the automated Phase 6 check keeps the build plus the wheel content/metadata checks. → Phase 6.
 
 ## Acceptance Criteria
 
 - **R1, R3–R6, R8:** the Phase 3 named tests in `tests/test_window_query.py`, `tests/test_calendar_selection.py` and `tests/test_mailto.py` pass, and so does `tests/test_public_api.py` (Phase 4).
 - **R2:** the Phase 3 calendars tests and `tests/test_public_api.py` pass, and the live smoke shows `list_calendars()` is non-empty.
-- **R7, R11 (exit codes 0–5, empty stdout on error, one stderr line for 1/3/4/5) and R12 (UTC-only input in the CLI and API; `Z` output):** pass in `tests/test_cli.py` and `tests/test_cli_contract.py`, including real-subprocess cases.
+- **R7, R11 (exit codes 0–5, empty stdout on error, one stderr line for 1/3/4/5) and R12 (UTC-only input as epoch seconds or RFC 3339 `Z`/`+00:00` in the CLI and API; `Z` strings plus `_ts` epochs in output):** pass in `tests/test_cli.py` and `tests/test_cli_contract.py`, including real-subprocess cases.
 - **R9:** `tests/test_access.py` (gate outcomes and the grant/deny/timeout wait) `tests/test_eventkit_adapter.py` and `tests/test_public_api.py` pass. On the Mac, the Phase 5 manual reset → `request_access()` run is recorded in Findings.
 - **R10 and R14:** `bash scripts/check_readonly.sh` passes, and `tests/test_check_scripts.py` proves it fails on seeded violations and on an unreadable path.
 - **R13:** the cap boundary, old-absolute-window, multi-week and ±1-day widening tests (Phase 3) and the CLI over-cap, padding, old-window and multi-week tests (Phase 5) pass.
 - **R14:** `tests/test_import.py` passes, and the ubuntu CI job is green.
 - **R16:** `bash scripts/check_privacy.sh` passes in CI, the sentinel test in `tests/test_validate_json.py` passes, and the live smoke prints counts only.
 - **R17:** CI is green on macOS (3.11, 3.13) and ubuntu (3.12) for the pushed branch.
-- **R18:** `tests/test_schemas.py` and `tests/test_cli_contract.py` pass (format checking, schema-model sync, goldens), and the Phase 5 validation command validates live CLI output against both packaged schemas on the Mac.
+- **R18:** `tests/test_schemas.py`, `tests/test_schema_copies.py` and `tests/test_cli_contract.py` pass (including `schema` subcommand byte-equality and epoch/RFC 3339 input equivalence) (format checking, schema-model sync, goldens), and the Phase 5 validation command validates live CLI output against both packaged schemas on the Mac.
 - **R19:** `tests/test_platform_guard.py` passes.
 - README commands are executed verbatim on the Mac, except `tccutil reset` and the pinned-tag install (which gets its own post-tag check).
 - **R15:** the Phase 6 validation command proves the built wheel runs `--version`, contains `py.typed` and both schemas, and its `METADATA` carries `License-Expression: BSD-2-Clause`, `Requires-Python: >=3.11` and the darwin-only PyObjC requirement.
@@ -910,18 +936,13 @@ The review produced 62 findings: 3 Critical, 30 Important and 29 Minor, 9 of the
 | #59 (sequencing part) | Spike deletion is a second human-run Phase 0 commit. Scan-set part → R2-1 |
 | #62 | `validate_json.py` empty and non-JSON stdin tests; `set -o pipefail` |
 
-### Pending grill (round 2; not yet resolved; resolve before the next `/review-plan`)
+### Pending grill (round 2): resolved 2026-11-19
 
-Ordered with blocking decisions first. After grilling, apply them via `/dev-plan update` as `Decision (grilled): …`, replace the "Pending decision R2-n / Q-x" markers above, and re-run `/review-plan`.
+R2-1 to R2-4, Q-a and Q-b were grilled with the user on 2026-11-19 and applied above the marker as `Decision (grilled): …`. Q-a was an override/extension: the CLI and API accept epoch seconds or RFC 3339 UTC, and the output carries `_ts` epoch fields. R2-2 added published copies under `docs/schema/`. The others were accepted as recommended.
 
-- **R2-4** (#20): Should Phase 0 run before the final `/review-plan`, and where do non-contract Phase 0 results go?
-- **R2-3** (#8): How does the adapter handle an EventKit nil in a field the schema types as non-null?
-- **R2-2** (#14, #58): How does koda obtain the schemas, and do post-v0.1.0 fields stay optional?
-- **R2-1** (#11, #12, #27, #59): What does `check_privacy.sh` scan: tracked files only, or tracked plus untracked-not-ignored?
-- **Q-a**: Reject RFC 3339 `-00:00` alongside naive input?
-- **Q-b**: Should the Phase 6 `uv tool install --force .` (writes `~/.local/bin`) become a user-run step?
+### Next step
 
-(Full questions and recommendations are in the parent agent's round-2 report.)
+**The user runs Phase 0 (the human-run EventKit/TCC spike) now**, recording measurements in `## Findings` (Phase 0) above, then runs one final `/review-plan`. `/conduct` starts only after that review, once its marker is written. The contract changed again in this update (input forms, `_ts` output fields, `schema` subcommand, `docs/schema/`, skip rule, privacy scan set), so the earlier markers wouldn't hold anyway.
 
 ## Issues & Solutions
 
