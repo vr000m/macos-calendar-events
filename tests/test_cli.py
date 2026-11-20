@@ -673,6 +673,60 @@ def test_text_only_stdout_gets_the_same_text(
     assert text.getvalue().encode("utf-8") == expected
 
 
+class _ScriptedText:
+    """A text-only stdout (no ``buffer``) whose ``write`` results are scripted."""
+
+    def __init__(self, script: list[Any]) -> None:
+        self.script, self.text = list(script), ""
+
+    def write(self, s: str) -> int | None:
+        step = self.script.pop(0) if self.script else len(s)
+        if isinstance(step, BaseException):
+            raise step
+        if step is None:  # a legacy file-like: writes everything, returns None
+            self.text += s
+            return None
+        self.text += s[:step]
+        return min(step, len(s))
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("script", "complete"),
+    [
+        ([], True),
+        ([5] * 5000, True),  # short writes are continued, not lost
+        ([1, 3, None], True),
+        ([None], True),
+        ([0], False),
+        ([5, 0], False),
+        ([BrokenPipeError(32, "Broken pipe")], False),
+        ([5, OSError(28, "No space")], False),
+    ],
+)
+@pytest.mark.parametrize("argv", [["schema", "window-v1"], ["--version"], ["--help"]])
+def test_text_only_stdout_exit_0_only_when_every_character_is_written(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    script: list[Any],
+    complete: bool,
+    argv: list[str],
+) -> None:
+    expected = _expected_stdout(argv).decode("utf-8")
+    stdout = _ScriptedText(script)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    code = main(argv, source=source())
+    err = capsys.readouterr().err
+    if complete:
+        assert code == 0 and err == ""
+        assert stdout.text == expected
+    else:
+        assert code == 1
+        assert len(err.splitlines()) == 1 and err.startswith("internal error: ")
+
+
 def test_in_process_write_failure_leaves_the_host_stdout_alone(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

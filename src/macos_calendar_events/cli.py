@@ -96,12 +96,20 @@ def _write_stdout(data: bytes) -> None:
     accepted stay written, so a write that fails partway leaves a prefix on stdout.
 
     A text-only stdout with no ``buffer`` (an in-process ``redirect_stdout(io.StringIO())``)
-    gets the same UTF-8 text.
+    gets the same UTF-8 text, with short writes continued and 0 a failure; ``None`` there is
+    a legacy file-like's "all written" (``TextIOBase.write`` returns the count).
     """
     sys.stdout.flush()
     buffer = getattr(sys.stdout, "buffer", None)
     if buffer is None:
-        sys.stdout.write(data.decode("utf-8"))
+        text = data.decode("utf-8")
+        while text:
+            count = sys.stdout.write(text)
+            if count is None:
+                break
+            if not count:
+                raise BlockingIOError(errno.EAGAIN, "stdout accepted no characters")
+            text = text[count:]
         sys.stdout.flush()
         return
     out = getattr(buffer, "raw", buffer)
