@@ -404,6 +404,19 @@ def test_rfc3339_with_trailing_newline_fails_the_grammar_check(text: str) -> Non
         parse_instant_text(text)
 
 
+@pytest.mark.parametrize("hour", range(100))
+def test_rfc3339_hour_is_00_to_23_in_the_grammar(hour: int) -> None:
+    # RFC 3339 time-hour is 00-23; Python 3.14's fromisoformat maps T24:00:00 to the next
+    # day's midnight, so the grammar, not the Python version, must reject it.
+    for suffix in ("Z", "+00:00", ".5Z"):
+        text = f"2025-11-19T{hour:02d}:00:00{suffix}"
+        if hour < 24:
+            assert parse_instant_text(text) == datetime(2025, 11, 19, hour, tzinfo=UTC)
+        else:
+            with pytest.raises(InvalidQueryError, match="expected epoch seconds or an RFC 3339"):
+                parse_instant_text(text)
+
+
 # --- ids -----------------------------------------------------------------------------
 
 

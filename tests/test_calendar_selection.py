@@ -117,6 +117,32 @@ def test_exact_id_wins_over_a_title_equal_to_it(raw_id: str, form: str) -> None:
     assert _ids(select_calendars([target, decoy], [selector])) == [raw_id]
 
 
+_FFFD, _LONE2 = "cal-�", "cal-\udc00"  # both lone-surrogate ids below list as _FFFD
+
+
+@pytest.mark.parametrize(
+    ("raw_ids", "selector", "selected"),
+    [
+        # a selector equal to a raw id selects that calendar only, never one whose id
+        # merely cleans to the same output id
+        ([_FFFD, "cal-" + _LONE], _FFFD, [_FFFD]),
+        (["cal-" + _LONE, _FFFD], _FFFD, [_FFFD]),
+        ([_FFFD, "cal-" + _LONE, _LONE2], _FFFD, [_FFFD]),
+        ([_FFFD, "cal-" + _LONE], "cal-" + _LONE, ["cal-" + _LONE]),
+        (["cal-" + _LONE, _LONE2], _LONE2, [_LONE2]),
+        # no raw id equals it: every calendar listed with that output id
+        (["cal-" + _LONE], _FFFD, ["cal-" + _LONE]),
+        (["cal-" + _LONE, _LONE2], _FFFD, ["cal-" + _LONE, _LONE2]),
+        (["cal-" + _LONE, "other"], _FFFD, ["cal-" + _LONE]),
+    ],
+)
+def test_exact_raw_id_never_selects_another_calendar(
+    raw_ids: list[str], selector: str, selected: list[str]
+) -> None:
+    cals = [raw_calendar(i, title=f"T{n}") for n, i in enumerate(raw_ids)]
+    assert _ids(select_calendars(cals, [selector])) == selected
+
+
 def test_unknown_selector_raises_even_with_a_valid_one() -> None:
     with pytest.raises(CalendarNotFoundError) as info:
         select_calendars(CALS, ["id-home", "Nope"])

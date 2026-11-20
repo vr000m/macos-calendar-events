@@ -81,8 +81,8 @@ LATEST_END = (
 )  # keeps widening in range
 _EPOCH_TEXT = re.compile(r"^[0-9]+$")
 _RFC3339_UTC = re.compile(
-    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|\+00:00)$"
-)
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T([01][0-9]|2[0-3]):[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|\+00:00)$"
+)  # hour 00-23 here: Python 3.14's fromisoformat accepts T24:00:00 as next-day midnight
 
 
 def access_status_from_int(value: int) -> AccessStatus:
@@ -281,9 +281,10 @@ def select_calendars(
 ) -> list[RawCalendar]:
     """R6: id match first, else casefolded title match; every selector must match.
 
-    A selector matches by id when it equals the raw ``calendarIdentifier`` or the output id
-    (:func:`unicode_text` of the raw id; the two differ only for a lone surrogate). The
-    returned records keep their raw ids for the adapter's lookup.
+    A selector equal to a raw ``calendarIdentifier`` selects that calendar only. Otherwise it
+    matches by id every calendar whose output id (:func:`unicode_text` of the raw id; the two
+    differ only for a lone surrogate) equals it. The returned records keep their raw ids for
+    the adapter's lookup.
     """
     if selectors is None:
         return list(cals)
@@ -292,7 +293,9 @@ def select_calendars(
     chosen: set[str] = set()
     unmatched: list[str] = []
     for selector in selectors:
-        by_id = [c.id for c in cals if selector in (c.id, unicode_text(c.id))]
+        by_id = [c.id for c in cals if c.id == selector] or [
+            c.id for c in cals if unicode_text(c.id) == selector
+        ]
         if by_id:
             chosen.update(by_id)
             continue
