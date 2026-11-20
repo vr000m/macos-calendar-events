@@ -1169,6 +1169,7 @@ Four commits after the review marker, each with a regression test that failed fi
 - `6ada071`: `scripts/check_privacy.sh` sets `pipefail`, so a failing `git ls-files` reaches the documented exit-2 branch.
 - `040d6ab`: exit 2 instead of 1 for out-of-range input: an oversized `--pad-minutes`, an epoch string over CPython's 4300-digit limit, and a trailing-newline epoch (`fullmatch`). `_mapping.validate_window` gained `LATEST_END` (9999-12-31T23:59:59Z minus the 1-day query margin), so an end beyond it exits 2.
 - `563fe24`: a bare-string `calendars=` raises `InvalidQueryError`; `CalendarNotFoundError.__reduce__` makes it picklable.
+- Follow-up `86fa26d` (test only): RFC 3339 text with a trailing newline is rejected by the grammar check itself (`fullmatch`). Before the fix, `fromisoformat` already rejected it, so this guards the regex path. Non-live suite: 346 passed, 1 skipped, 2 deselected.
 
 Contract text above the marker (R6, R11, R12, R13 and the `validate_window` sequence diagram) does not yet list these bounds. It was left alone because editing it invalidates the review marker; the README and CHANGELOG state them.
 
