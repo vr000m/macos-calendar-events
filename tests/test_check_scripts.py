@@ -139,6 +139,11 @@ PYOBJC_IMPORTS = [
     "__import__('EventKit')",
     "import importlib\nimportlib.import_module('Foundation')",
     "from importlib import import_module\nimport_module('AppKit.NSColor')",
+    "import Cocoa",  # re-exports Foundation and AppKit
+    "from Cocoa import NSAppleScript",
+    "import CoreFoundation",
+    "from PyObjCTools import AppHelper",
+    "import PyObjCTest",
 ]
 NOT_PYOBJC_IMPORTS = [
     "# import EventKit only in comments",
@@ -316,6 +321,7 @@ FILE_NAMES = [
     "new\nline",
     "back\\slash.txt",
     "-dash.txt",
+    "-",  # grep reads stdin for a "-" operand, even after "--"
     "ünïcode.txt",
     "dir with\nnewline/inner.txt",
 ]
@@ -331,6 +337,16 @@ def test_privacy_scans_every_file_whatever_its_name(tree: Tree, name: str, track
     assert "[privacy]" in proc.stderr
     assert len(proc.stderr.splitlines()) == 1  # the name is shown on one line
     assert secret not in proc.stderr
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_privacy_file_named_dash_does_not_end_the_scan(tree: Tree, tracked: bool) -> None:
+    """A clean file named ``-`` sorts first; the files listed after it are still scanned."""
+    secret = _addr("someone", "corp." + "com")
+    root = tree({"-": "clean\n", "z.txt": f"contact: {secret}\n"}, add=tracked)
+    proc = _run("check_privacy.sh", root)
+    assert proc.returncode == 1, proc.stderr
+    assert "[privacy] z.txt:" in proc.stderr
 
 
 @pytest.mark.parametrize(

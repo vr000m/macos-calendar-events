@@ -18,7 +18,12 @@ import ast
 import sys
 from pathlib import Path
 
-BANNED = frozenset({"EventKit", "Foundation", "AppKit", "objc"})
+# Every top-level module the PyObjC distributions we depend on install (pyobjc-core,
+# pyobjc-framework-Cocoa, pyobjc-framework-EventKit): Cocoa re-exports Foundation and AppKit.
+BANNED = frozenset(
+    {"EventKit", "Foundation", "AppKit", "objc"}
+    | {"Cocoa", "CoreFoundation", "PyObjCTools", "PyObjCTest"}
+)
 
 
 def _banned(name: object) -> bool:

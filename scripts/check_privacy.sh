@@ -48,7 +48,8 @@ while IFS= read -r -d '' path; do
     # -a: binary content is scanned as text, never skipped. LC_ALL=C: byte semantics.
     # grep exit codes are read strictly: 0 match, 1 no match, anything else is an error
     # (e.g. an unreadable file) and must not pass as "clean".
-    found="$(LC_ALL=C grep -aohE -e "$email" -- "$path" 2>/dev/null)"
+    # "./": a path named "-" would otherwise make grep read stdin (the rest of the listing).
+    found="$(LC_ALL=C grep -aohE -e "$email" -- "./$path" 2>/dev/null)"
     status=$?
     if [ "$status" -eq 1 ]; then
         continue
