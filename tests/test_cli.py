@@ -141,6 +141,13 @@ def test_padding_over_cap_is_usage_error(run: Callable[..., Out]) -> None:
     assert result.code == 2 and result.out == ""
 
 
+@pytest.mark.parametrize("minutes", ["2000000000", "99999999999999999999"])
+def test_absurd_padding_is_usage_error_not_internal(run: Callable[..., Out], minutes: str) -> None:
+    result = run(window("--pad-minutes", minutes), source())
+    assert result.code == 2 and result.out == ""
+    assert len(result.err_lines) == 1
+
+
 def test_padding_before_1970(run: Callable[..., Out]) -> None:
     assert run(window("--pad-minutes", "15", start="0", end="3600"), source()).code == 2
     assert run(window("--pad-minutes", "0", start="0", end="3600"), source()).code == 0
@@ -313,6 +320,9 @@ def test_non_darwin_module_run() -> None:
         ("2025-13-19T16:00:00Z", "2025-11-19T17:00:00Z", 2),  # regex ok, fromisoformat fails
         ("1763571600", "1763568000", 2),  # end <= start
         ("1763568000", "1763568000", 2),
+        ("1763568000\n", "1763571600", 2),  # ``$`` must not accept a trailing newline
+        ("9" * 5000, "1763571600", 2),  # beyond CPython's int-from-string digit limit
+        ("253402214400", "253402300799", 2),  # widening by a day would pass year 9999
     ],
 )
 def test_input_forms(run: Callable[..., Out], start: str, end: str, code: int) -> None:

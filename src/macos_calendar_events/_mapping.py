@@ -76,6 +76,9 @@ PARTICIPANT_TYPE: Mapping[int, ParticipantType] = {
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 MAX_WINDOW = timedelta(days=3 * 365 - 2)  # R13
 QUERY_MARGIN = timedelta(days=1)  # R13 widening
+LATEST_END = (
+    datetime(9999, 12, 31, 23, 59, 59, tzinfo=UTC) - QUERY_MARGIN
+)  # keeps widening in range
 _EPOCH_TEXT = re.compile(r"^[0-9]+$")
 _RFC3339_UTC = re.compile(
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?(Z|\+00:00)$"
@@ -183,9 +186,14 @@ def parse_instant(value: datetime | int) -> datetime:
 
 def parse_instant_text(text: str) -> datetime:
     """CLI input: ``^[0-9]+$`` epoch seconds or an RFC 3339 UTC string (R12)."""
-    if _EPOCH_TEXT.match(text):
-        return parse_instant(int(text))
-    if not _RFC3339_UTC.match(text):
+    # fullmatch, not match: ``$`` would also accept a trailing newline.
+    if _EPOCH_TEXT.fullmatch(text):
+        try:
+            seconds = int(text)
+        except ValueError:  # CPython refuses to convert very long digit strings
+            raise InvalidQueryError("epoch seconds out of range") from None
+        return parse_instant(seconds)
+    if not _RFC3339_UTC.fullmatch(text):
         raise InvalidQueryError("expected epoch seconds or an RFC 3339 UTC time (Z or +00:00)")
     try:
         parsed = datetime.fromisoformat(text)
@@ -206,6 +214,8 @@ def validate_window(start: datetime, end: datetime) -> None:
         raise InvalidQueryError("window starts before 1970-01-01T00:00:00Z")
     if end <= start:
         raise InvalidQueryError("window end must be after start")
+    if end > LATEST_END:
+        raise InvalidQueryError("window ends too close to year 9999")
     if end - start > MAX_WINDOW:
         raise InvalidQueryError(f"window longer than {MAX_WINDOW.days} days")
 

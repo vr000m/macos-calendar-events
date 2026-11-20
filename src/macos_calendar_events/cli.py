@@ -91,8 +91,11 @@ def _run(args: argparse.Namespace, get_source: Callable[[], EventSource]) -> byt
     end = _mapping.parse_instant_text(args.end)
     if end <= start:
         raise InvalidQueryError("--end must be after --start")
-    pad = timedelta(minutes=args.pad_minutes)
-    padded = (start - pad, end + pad)
+    try:
+        pad = timedelta(minutes=args.pad_minutes)
+        padded = (start - pad, end + pad)
+    except OverflowError:  # an absurd --pad-minutes is a usage error, not an internal one
+        raise InvalidQueryError("--pad-minutes out of range") from None
     result = _api.query_events(
         get_source,
         *padded,
