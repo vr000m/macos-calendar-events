@@ -7,6 +7,8 @@
 # but the addresses themselves are never printed.
 # Exit: 0 clean, 1 violation, 2 error (e.g. not a git repository).
 set -u
+# pipefail: a failing `git ls-files` must reach the error branch below, not be masked by `sort`.
+set -o pipefail
 
 if ! top="$(git rev-parse --show-toplevel 2>/dev/null)"; then
     echo "[privacy-error] not inside a git repository" >&2

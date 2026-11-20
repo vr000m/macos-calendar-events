@@ -201,6 +201,27 @@ def test_privacy_non_git_directory(tmp_path: Path) -> None:
     assert proc.returncode == 2
 
 
+def test_privacy_git_listing_failure_is_an_error_not_a_pass(tree: Tree, tmp_path: Path) -> None:
+    root = tree()
+    real_git = shutil.which("git")
+    assert real_git is not None
+    shim_dir = tmp_path / "shim"
+    shim_dir.mkdir()
+    shim = shim_dir / "git"
+    shim.write_text(f'#!/bin/bash\n[ "$1" = "ls-files" ] && exit 128\nexec "{real_git}" "$@"\n')
+    shim.chmod(0o755)
+    proc = subprocess.run(
+        ["bash", str(root / "scripts" / "check_privacy.sh")],
+        cwd=root,
+        env={**os.environ, "PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert "[privacy-error]" in proc.stderr
+
+
 def test_privacy_untracked_not_ignored_file(tree: Tree) -> None:
     root = tree()
     (root / "scratch.txt").write_text(_addr("someone", "corp" + ".com") + "\n")
