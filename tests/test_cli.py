@@ -1,7 +1,9 @@
 """CLI behavior via ``main([...], source=FakeSource(...))`` (R7, R11, R12, R18)."""
 
 import contextlib
+import errno
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -639,6 +641,104 @@ def test_stdout_writer_exit_0_only_when_every_byte_is_written(
     else:
         assert code == 1
         assert len(err.splitlines()) == 1 and err.startswith("internal error: ")
+
+
+class _FileRaw:
+    """A raw stream over a real fd: ``fail_after`` bytes are written, then ``write`` raises."""
+
+    def __init__(self, fd: int, fail_after: int | None) -> None:
+        self.fd, self.left = fd, fail_after
+
+    def fileno(self) -> int:
+        return self.fd
+
+    def write(self, view: memoryview) -> int:
+        if self.left is None:
+            return os.write(self.fd, view)
+        if self.left == 0:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        n = os.write(self.fd, bytes(view[: self.left]))
+        self.left -= n
+        return n
+
+    def flush(self) -> None:
+        pass
+
+
+class _FileStdout:
+    def __init__(self, fd: int, fail_after: int | None) -> None:
+        self.raw = _FileRaw(fd, fail_after)
+        self.buffer = _BufferedWithRaw(self.raw)  # type: ignore[arg-type]
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("flags", "before", "seek", "fail_after", "expected_file", "expected_exit"),
+    [
+        # `> file`: a failed write leaves the file as it was
+        (os.O_WRONLY, b"", 0, 7, b"", 1),
+        (os.O_WRONLY, b"", 0, 0, b"", 1),  # nothing written: nothing to undo
+        # `{ echo abc; cmd; } > file`: only this call's bytes go
+        (os.O_WRONLY, b"abc", 3, 7, b"abc", 1),
+        # `>> file`: the append offset is the file size, not the descriptor offset
+        (os.O_WRONLY | os.O_APPEND, b"abc", 0, 7, b"abc", 1),
+        # a file longer than start + written: not ours to cut, nothing is touched
+        (os.O_WRONLY, b"x" * 40000, 0, 7, None, 1),
+        # success: everything stays
+        (os.O_WRONLY, b"abc", 3, None, None, 0),
+    ],
+)
+def test_failed_write_to_a_regular_file_is_undone(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    flags: int,
+    before: bytes,
+    seek: int,
+    fail_after: int | None,
+    expected_file: bytes | None,
+    expected_exit: int,
+) -> None:
+    target = tmp_path / "out.json"
+    target.write_bytes(before)
+    fd = os.open(target, flags)
+    try:
+        os.lseek(fd, seek, os.SEEK_SET)
+        monkeypatch.setattr(sys, "stdout", _FileStdout(fd, fail_after))
+        code = main(["schema", "window-v1"], source=source())
+    finally:
+        os.close(fd)
+    err = capsys.readouterr().err
+    assert code == expected_exit
+    content = target.read_bytes()
+    if expected_exit == 0:
+        assert err == ""
+        assert content == before[:seek] + _expected_stdout(["schema", "window-v1"])
+    else:
+        assert len(err.splitlines()) == 1 and err.startswith("internal error: ")
+        if expected_file is not None:
+            assert content == expected_file
+        else:  # the file was longer than what we wrote: untouched
+            assert content[:7] == _expected_stdout(["schema", "window-v1"])[:7]
+            assert len(content) == len(before)
+
+
+def test_failed_write_to_a_pipe_may_leave_a_prefix(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A pipe cannot take bytes back: the documented R11 exception, not undone."""
+    read_fd, write_fd = os.pipe()
+    try:
+        monkeypatch.setattr(sys, "stdout", _FileStdout(write_fd, 7))
+        code = main(["schema", "window-v1"], source=source())
+        os.close(write_fd)
+        assert code == 1
+        assert os.read(read_fd, 100) == _expected_stdout(["schema", "window-v1"])[:7]
+    finally:
+        os.close(read_fd)
+    assert capsys.readouterr().err.startswith("internal error: ")
 
 
 def _expected_stdout(argv: list[str]) -> bytes:

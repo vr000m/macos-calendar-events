@@ -5,8 +5,9 @@ granted; 4 EventKit unavailable; 5 calendar selector not found. On 1/3/4/5 the C
 writes exactly one stderr line; stdout is written once, only after the output is built.
 Every stdout write, ``--help`` and ``--version`` included, goes through ``_emit``: exit 0
 only when every byte was written, else exit 1. A write that fails partway (for example a
-full non-blocking pipe or a full disk) can leave a prefix on stdout: stdout is valid only on
-exit 0.
+full non-blocking pipe or a full disk) is undone when stdout is a regular file, which is cut
+back to its length before the write; a pipe cannot take bytes back and can keep a prefix.
+Stdout is valid only on exit 0.
 """
 
 from __future__ import annotations
@@ -14,11 +15,15 @@ from __future__ import annotations
 import argparse
 import contextlib
 import errno
+import fcntl
 import io
+import os
+import stat
 import sys
 from collections.abc import Callable, Sequence
 from datetime import timedelta
 from importlib.resources import files
+from typing import Any
 
 from . import __version__, _api, _eventkit, _mapping
 from ._raw import EventSource
@@ -93,7 +98,9 @@ def _write_stdout(data: bytes) -> None:
     nothing buffered for the interpreter's exit-time flush to retry (no second error, and
     no process-wide state is changed). A write that accepts no bytes (``None`` from a full
     non-blocking pipe, or 0) raises instead of being mistaken for success. Bytes already
-    accepted stay written, so a write that fails partway leaves a prefix on stdout.
+    accepted stay written on a pipe, which cannot take them back, so a write that fails
+    partway can leave a prefix there. When stdout is a regular file the bytes this call wrote
+    are cut back off (see :func:`_undo_partial_write`), so a failed write leaves it as it was.
 
     A text-only stdout with no ``buffer`` (an in-process ``redirect_stdout(io.StringIO())``)
     gets the same UTF-8 text, with short writes continued and 0 a failure; ``None`` there is
@@ -113,13 +120,56 @@ def _write_stdout(data: bytes) -> None:
         sys.stdout.flush()
         return
     out = getattr(buffer, "raw", buffer)
+    start = _file_position(out)
     view = memoryview(data)
-    while view:
-        written = out.write(view)
-        if not written:
-            raise BlockingIOError(errno.EAGAIN, "stdout accepted no bytes")
-        view = view[written:]
-    out.flush()
+    total = 0
+    try:
+        while view:
+            written = out.write(view)
+            if not written:
+                raise BlockingIOError(errno.EAGAIN, "stdout accepted no bytes")
+            view = view[written:]
+            total += written
+        out.flush()
+    except Exception:
+        if start is not None:
+            _undo_partial_write(start[0], start[1], total)
+        raise
+
+
+def _file_position(out: Any) -> tuple[int, int] | None:
+    """``(fd, offset)`` where this call's bytes start, when stdout is a regular file.
+
+    ``None`` for a pipe, terminal, in-memory stream or anything else that cannot be rewound.
+    An append-mode descriptor writes at the end of the file, so its start is the file size.
+    """
+    try:
+        fd = out.fileno()
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND:
+            return fd, info.st_size
+        return fd, os.lseek(fd, 0, os.SEEK_CUR)
+    except (AttributeError, OSError, ValueError):
+        return None
+
+
+def _undo_partial_write(fd: int, start: int, written: int) -> None:
+    """Cut the ``written`` bytes this process put at ``start`` back off a regular file.
+
+    Only when the file is exactly ``start + written`` long, so bytes another writer added or
+    a file that was longer to begin with are never touched. Best effort: an error here
+    leaves the prefix, as a pipe would, and the original write error is the one reported.
+    """
+    if not written:
+        return
+    try:
+        if os.fstat(fd).st_size == start + written:
+            os.ftruncate(fd, start)
+            os.lseek(fd, start, os.SEEK_SET)
+    except OSError:
+        pass
 
 
 def _emit(data: bytes) -> int:
