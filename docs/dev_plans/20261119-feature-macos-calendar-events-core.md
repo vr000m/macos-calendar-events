@@ -1099,9 +1099,9 @@ Codebase claims were re-verified:
 
 D1–D9 from `/review-plan` run 20261119T143424 were grilled with the user on 2026-11-19 and applied above the marker as `Decision (grilled): D1…D9`. D2 was an override (UTC-only input and output); D6 was accepted with clarifications (rationale for the ±1-day widening; the cap limits length, not age). The others were accepted as recommended.
 
-### Re-review required
+### Re-review required (resolved)
 
-**`/review-plan` must re-run before `/conduct`.** D2 changed the CLI and Python **input contract** (UTC-only `--start`/`--end`; non-UTC rejected with exit 2), which supersedes the earlier "naive = local" rule. D2, D3 and D6 also changed the output schema (`start_date`/`end_date`, open enums, `EventStatus.UNKNOWN`) and the query range. The review marker is intentionally left unfilled.
+Historical: after the D1–D9 grill, `/review-plan` had to re-run before `/conduct`, because D2, D3 and D6 changed the input contract, the output schema and the query range. It did re-run, and the marker above records that review (2026-11-20 @ `2ce6b3c`).
 
 ### Review Findings Addressed, round 2 (`/review-plan` run 20261119T155444, plan hash 3ced2e6; applied 2026-11-19)
 
@@ -1172,6 +1172,21 @@ Four commits after the review marker, each with a regression test that failed fi
 - Follow-up `86fa26d` (test only): RFC 3339 text with a trailing newline is rejected by the grammar check itself (`fullmatch`). Before the fix, `fromisoformat` already rejected it, so this guards the regex path. Non-live suite: 346 passed, 1 skipped, 2 deselected.
 
 Contract text above the marker (R6, R11, R12, R13 and the `validate_window` sequence diagram) does not yet list these bounds. It was left alone because editing it invalidates the review marker; the README and CHANGELOG state them.
+
+### Review-gauntlet fixes (round 1, 2026-11-20; uncommitted fixer pass)
+
+Each fix has a regression test that failed with the fix reverted (mutation check):
+- CLI parsers set `allow_abbrev=False`, so an abbreviation such as `calendars --pro` or `window … --i` exits 2 instead of prompting or including notes (`test_abbreviated_options_are_rejected`, every unambiguous prefix of every option).
+- A failed stdout write exits 1 with one `internal error: <Exception>` line; fd 1 is pointed at `/dev/null` so the exit-time flush can't add a traceback (closed-pipe subprocess test; was exit 120).
+- `_eventkit._text` (and the calendar id) pass through the pure `_mapping.unicode_text`, which replaces unpaired UTF-16 surrogates with U+FFFD. One such title made `window`/`calendars` exit 1, and also broke the id hash in the Python API.
+- `local_components` builds its Gregorian calendar per call. The calendar cached at namespace load (since `4fe1d57`) kept the time zone of its creation, so a long-running Python process dated all-day events in the old zone after a zone change.
+- `window_to_json` accepts int epoch bounds like `events_in_window`; `request_access()` defaults to `_api.ACCESS_TIMEOUT_S`.
+- `scripts/validate_json.py` rejects `NaN`/`Infinity`/`-Infinity`; `scripts/check_privacy.sh` reads each file's grep exit strictly (2 = `[privacy-error]`, exit 2, wins over a violation).
+- The live cap check returns the size of the symmetric difference of the key sets (it compared set sizes, so a missing row could be masked by an extra one); it is still counts only. A non-live table test covers the helper.
+- README: the integration example checks the document is an object with a list `events`; Known limitations labels the window cap unverified at its full length (R13).
+- CI actions are pinned to commit SHAs resolved with `gh api` (`actions/checkout` v4 → `11d5960`, `astral-sh/setup-uv` v6 → `d0cc045`, an annotated tag dereferenced).
+
+Left for a decision (not changed): the plan Status header; schema `$id` pinned to `v0.1.0`; a pre-grant store surviving a request that times out (D7 and Phase 4's "after denial, no new store is built"); the overlap filter seeing truncated whole-second instants (R18 truncates at the `Raw*` boundary, R1 asks for every overlapping event).
 
 ### Next step
 

@@ -15,5 +15,12 @@ All notable changes to this project are documented here. Golden-file (`tests/gol
 - `scripts/check_privacy.sh` exits 2 when `git ls-files` fails. It passed with nothing scanned before.
 - `window` exits 2 (was 1, `internal error`) for an oversized `--pad-minutes`, an end later than 9999-12-30T23:59:59Z (the last instant that still allows the one-day query margin), an epoch string of 4301 or more digits, and an epoch string with a trailing newline (the last was accepted). The Python API raises `InvalidQueryError` for the same end bound (it raised `OverflowError` before).
 - `events_in_window(calendars="Work")` raises `InvalidQueryError`. It was read as one selector per character. `CalendarNotFoundError` can be pickled and copied.
+- The CLI rejects abbreviated options (exit 2). `calendars --pro` used to prompt for access and `window … --i` used to include notes.
+- A failed stdout write (for example a reader that closed the pipe) exits 1 with one `internal error: <Exception>` line. It printed a traceback and exited 120 before.
+- Calendar text holding an unpaired UTF-16 surrogate is written with U+FFFD in its place. The whole `window` or `calendars` command exited 1 before.
+- All-day dates follow a time zone change made while the process runs (Python API). The zone of the first query was kept before.
+- `window_to_json` accepts int epoch bounds, as `events_in_window` does. It raised `AttributeError` before. `request_access()` takes its default timeout from the same 60 s constant as the read gate.
+- `scripts/validate_json.py` rejects `NaN`, `Infinity` and `-Infinity` as not JSON (exit 2), and `scripts/check_privacy.sh` exits 2 when a file can't be read. Both passed before.
+- README: the integration example returns no hints for a non-object document or a non-list `events`, and the window cap is labelled unverified at its full length.
 ### Changed
 - Golden `tests/golden/window-v1.json`: added timed rows in Asia/Tokyo, Asia/Kolkata and Europe/Helsinki (Helsinki row selected only by padding) and all-day rows for each zone (local-midnight bounds, exclusive `end_date`). `calendars-v1.json` unchanged. Reviewed after the fact.
