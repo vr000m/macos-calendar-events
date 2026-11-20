@@ -567,3 +567,21 @@ def test_ordering_ties_at_each_level() -> None:
     ]
     result = query(rows, calendars=cals)
     assert [e.title for e in result.events] == ["F", "B", "C", "D", "E", "A"]
+
+
+@pytest.mark.parametrize("zone", ["Asia/Tokyo", "Asia/Kolkata", "Europe/Helsinki"])
+def test_non_utc_aware_inputs_are_rejected(zone: str) -> None:
+    from zoneinfo import ZoneInfo
+
+    from macos_calendar_events._mapping import parse_instant
+
+    with pytest.raises(InvalidQueryError, match="must be UTC"):
+        parse_instant(datetime(2025, 11, 20, 9, 0, tzinfo=ZoneInfo(zone)))
+
+
+@pytest.mark.parametrize("text", ["2025-11-20T09:00:00+09:00", "2025-11-20T09:00:00+05:30"])
+def test_non_utc_offset_text_is_rejected(text: str) -> None:
+    from macos_calendar_events._mapping import parse_instant_text
+
+    with pytest.raises(InvalidQueryError):
+        parse_instant_text(text)
