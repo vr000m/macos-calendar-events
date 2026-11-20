@@ -67,3 +67,15 @@ def test_unknown_schema_name() -> None:
     proc = _run(b"{}", "nope-v1")
     assert proc.returncode == 2
     assert proc.stdout == b""
+
+
+def test_non_standard_json_constants_are_not_json() -> None:
+    # The schemas allow unknown keys, so only the decoder can reject these.
+    base = json.dumps(_valid_doc())[:-1]  # drop the closing brace
+    for constant in ("NaN", "Infinity", "-Infinity"):
+        proc = _run(f'{base}, "extra": {constant}}}'.encode(), "window-v1")
+        assert proc.returncode == 2, constant
+        assert proc.stderr == b"invalid: not JSON\n"
+        assert proc.stdout == b""
+    for value in ("1.5", "-0", "1e308", "null", '"NaN"'):  # standard JSON still validates
+        assert _run(f'{base}, "extra": {value}}}'.encode(), "window-v1").returncode == 0, value

@@ -222,6 +222,39 @@ def test_privacy_git_listing_failure_is_an_error_not_a_pass(tree: Tree, tmp_path
     assert "[privacy-error]" in proc.stderr
 
 
+@pytest.mark.parametrize(
+    ("unreadable", "violation", "expected"),
+    [
+        (False, False, 0),
+        (False, True, 1),
+        (True, False, 2),  # nothing scanned is not "clean"
+        (True, True, 2),  # an error wins over a violation
+    ],
+)
+def test_privacy_unreadable_file_is_an_error_not_a_pass(
+    tree: Tree, unreadable: bool, violation: bool, expected: int
+) -> None:
+    secret = _addr("someone", "corp." + "com")
+    root = tree(
+        {
+            "locked.txt": f"contact: {secret}\n",
+            "other.txt": f"contact: {secret}\n" if violation else "clean\n",
+        }
+    )
+    locked = root / "locked.txt"
+    if unreadable:
+        locked.chmod(0)
+    else:
+        locked.write_text("clean\n")
+    try:
+        proc = _run("check_privacy.sh", root)
+    finally:
+        locked.chmod(0o644)
+    assert proc.returncode == expected, proc.stderr
+    assert ("[privacy-error]" in proc.stderr) is unreadable
+    assert secret not in proc.stderr
+
+
 def test_privacy_untracked_not_ignored_file(tree: Tree) -> None:
     root = tree()
     (root / "scratch.txt").write_text(_addr("someone", "corp" + ".com") + "\n")

@@ -3,7 +3,8 @@
 Usage: <command> | uv run python scripts/validate_json.py {window-v1|calendars-v1}
 
 Prints only JSON paths and validator keywords, never values. Exit codes: 0 valid,
-1 schema violations, 2 usage error, empty stdin or not JSON.
+1 schema violations, 2 usage error, empty stdin or not JSON (``NaN``/``Infinity`` count as
+not JSON).
 """
 
 from __future__ import annotations
@@ -15,6 +16,11 @@ from importlib.resources import files
 from jsonschema import Draft202012Validator
 
 NAMES = ("window-v1", "calendars-v1")
+
+
+def _reject_constant(name: str) -> object:
+    # Python's decoder accepts NaN/Infinity/-Infinity, which RFC 8259 JSON does not.
+    raise ValueError("non-standard JSON constant")
 
 
 def main(argv: list[str]) -> int:
@@ -32,7 +38,7 @@ def main(argv: list[str]) -> int:
         print("invalid: empty input", file=sys.stderr)
         return 2
     try:
-        document = json.loads(raw)
+        document = json.loads(raw, parse_constant=_reject_constant)
     except ValueError:  # the decoder message can quote input; never print it
         print("invalid: not JSON", file=sys.stderr)
         return 2
