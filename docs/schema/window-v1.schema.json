@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vr000m/macos-calendar-events/v0.1.0/docs/schema/window-v1.schema.json",
+  "title": "macos-calendar-events window document (schema_version 1)",
+  "description": "stdout of `macos-calendar-events window`. All keys are required; unknown keys may be added within v1 and must be ignored. Enum fields are open: map unknown values to \"unknown\".",
+  "type": "object",
+  "required": ["schema_version", "window", "events"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"const": 1},
+    "window": {"$ref": "#/$defs/window"},
+    "events": {"type": "array", "items": {"$ref": "#/$defs/event"}}
+  },
+  "$defs": {
+    "instant": {
+      "description": "UTC instant, RFC 3339 with whole seconds and a Z suffix.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "maxLength": 20
+    },
+    "instant_ts": {
+      "description": "The sibling instant as integer Unix epoch seconds; may be negative (before 1970).",
+      "type": "integer"
+    },
+    "nullable_string": {"type": ["string", "null"]},
+    "nullable_date": {
+      "description": "Calendar date YYYY-MM-DD (all-day events only), else null.",
+      "type": ["string", "null"],
+      "format": "date"
+    },
+    "window": {
+      "description": "The padded caller window, half-open [start, end).",
+      "type": "object",
+      "required": ["start", "end", "start_ts", "end_ts"],
+      "additionalProperties": true,
+      "properties": {
+        "start": {"$ref": "#/$defs/instant"},
+        "end": {"$ref": "#/$defs/instant"},
+        "start_ts": {"$ref": "#/$defs/instant_ts"},
+        "end_ts": {"$ref": "#/$defs/instant_ts"}
+      }
+    },
+    "event_status": {
+      "description": "Open enum. Known values: none, confirmed, tentative, canceled, unknown.",
+      "type": "string",
+      "x-known-values": ["none", "confirmed", "tentative", "canceled", "unknown"]
+    },
+    "participation_status": {
+      "description": "Open enum. Known values: unknown, pending, accepted, declined, tentative, delegated, completed, in_process.",
+      "type": "string",
+      "x-known-values": ["unknown", "pending", "accepted", "declined", "tentative", "delegated", "completed", "in_process"]
+    },
+    "participant_role": {
+      "description": "Open enum. Known values: unknown, required, optional, chair, non_participant.",
+      "type": "string",
+      "x-known-values": ["unknown", "required", "optional", "chair", "non_participant"]
+    },
+    "participant_type": {
+      "description": "Open enum. Known values: unknown, person, room, resource, group.",
+      "type": "string",
+      "x-known-values": ["unknown", "person", "room", "resource", "group"]
+    },
+    "participant": {
+      "type": "object",
+      "required": ["name", "email", "url", "role", "status", "type", "is_self"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {"$ref": "#/$defs/nullable_string"},
+        "email": {"$ref": "#/$defs/nullable_string"},
+        "url": {
+          "description": "Raw participant URL when it is not mailto:, else null.",
+          "type": ["string", "null"]
+        },
+        "role": {"$ref": "#/$defs/participant_role"},
+        "status": {"$ref": "#/$defs/participation_status"},
+        "type": {"$ref": "#/$defs/participant_type"},
+        "is_self": {"type": "boolean"}
+      }
+    },
+    "calendar_ref": {
+      "type": "object",
+      "required": ["id", "title", "source_title"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"$ref": "#/$defs/nullable_string"},
+        "source_title": {"$ref": "#/$defs/nullable_string"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "id", "external_id", "event_identifier", "title",
+        "start", "start_ts", "end", "end_ts", "all_day", "start_date", "end_date",
+        "time_zone", "location", "url", "notes", "status", "is_recurring", "is_detached",
+        "occurrence_start", "occurrence_start_ts", "organizer", "attendees", "self_status", "calendar"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"description": "Opaque; unique within one response.", "type": "string"},
+        "external_id": {"$ref": "#/$defs/nullable_string"},
+        "event_identifier": {"$ref": "#/$defs/nullable_string"},
+        "title": {"$ref": "#/$defs/nullable_string"},
+        "start": {"$ref": "#/$defs/instant"},
+        "start_ts": {"$ref": "#/$defs/instant_ts"},
+        "end": {"$ref": "#/$defs/instant"},
+        "end_ts": {"$ref": "#/$defs/instant_ts"},
+        "all_day": {"type": "boolean"},
+        "start_date": {"$ref": "#/$defs/nullable_date"},
+        "end_date": {"$ref": "#/$defs/nullable_date"},
+        "time_zone": {
+          "description": "Informational: IANA name when available, else EventKit's raw zone name; null = floating.",
+          "type": ["string", "null"]
+        },
+        "location": {"$ref": "#/$defs/nullable_string"},
+        "url": {"$ref": "#/$defs/nullable_string"},
+        "notes": {"$ref": "#/$defs/nullable_string"},
+        "status": {"$ref": "#/$defs/event_status"},
+        "is_recurring": {"type": "boolean"},
+        "is_detached": {"type": "boolean"},
+        "occurrence_start": {"$ref": "#/$defs/instant"},
+        "occurrence_start_ts": {"$ref": "#/$defs/instant_ts"},
+        "organizer": {"anyOf": [{"$ref": "#/$defs/participant"}, {"type": "null"}]},
+        "attendees": {"type": "array", "items": {"$ref": "#/$defs/participant"}},
+        "self_status": {"anyOf": [{"$ref": "#/$defs/participation_status"}, {"type": "null"}]},
+        "calendar": {"$ref": "#/$defs/calendar_ref"}
+      }
+    }
+  }
+}

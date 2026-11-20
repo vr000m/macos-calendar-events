@@ -221,3 +221,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+/.review-plan
+
+# Phase 0 spike results (counts only; never committed)
+/.spike/
+
+# skein run state (conduct / review-gauntlet)
+/.conduct/
+/.gauntlet/

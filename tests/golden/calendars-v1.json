@@ -1,0 +1,29 @@
+{
+  "calendars": [
+    {
+      "color_hex": null,
+      "id": "cal-holidays",
+      "read_only": true,
+      "source_title": null,
+      "source_type": "subscribed",
+      "title": "Holidays"
+    },
+    {
+      "color_hex": "#FF6600",
+      "id": "cal-work",
+      "read_only": false,
+      "source_title": "Example Org",
+      "source_type": "exchange",
+      "title": "Work"
+    },
+    {
+      "color_hex": "#0080FF",
+      "id": "cal-home",
+      "read_only": false,
+      "source_title": "iCloud",
+      "source_type": "caldav",
+      "title": "Home"
+    }
+  ],
+  "schema_version": 1
+}
