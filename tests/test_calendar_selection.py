@@ -1,5 +1,8 @@
 """R2 calendar mapping and ordering; R6 selection."""
 
+import copy
+import pickle
+
 import pytest
 
 from macos_calendar_events import _api
@@ -160,3 +163,25 @@ def test_api_unknown_selector_raises_not_found() -> None:
             prompt=False,
         )
     assert source.ranges == []
+
+
+def test_bare_string_calendars_is_invalid_not_one_selector_per_character() -> None:
+    source = FakeSource(calendars=CALS)
+    with pytest.raises(InvalidQueryError):
+        _api.query_events(
+            lambda: source,
+            1763568000,
+            1763571600,
+            calendars="Work",
+            include_notes=False,
+            prompt=False,
+        )
+    assert source.ranges == []
+
+
+def test_not_found_error_survives_pickle_and_copy() -> None:
+    error = CalendarNotFoundError(["Nope"], ["Home", "Work"])
+    for clone in (pickle.loads(pickle.dumps(error)), copy.copy(error), copy.deepcopy(error)):
+        assert clone.selectors == ("Nope",)
+        assert clone.available_titles == ("Home", "Work")
+        assert str(clone) == str(error)

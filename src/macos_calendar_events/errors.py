@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 from .models import AccessStatus
 
@@ -38,6 +39,11 @@ class CalendarNotFoundError(MacosCalendarEventsError):
         self.available_titles = tuple(available_titles)
         names = ", ".join(repr(s) for s in self.selectors)
         super().__init__(f"calendar selector not found: {names}")
+
+    def __reduce__(self) -> tuple[Any, ...]:
+        # The default would rebuild from ``args`` (the message only), which this
+        # two-argument constructor rejects; copy and pickle need the real arguments.
+        return (type(self), (self.selectors, self.available_titles))
 
 
 class EventKitUnavailableError(MacosCalendarEventsError):

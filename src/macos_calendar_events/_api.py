@@ -40,6 +40,8 @@ def query_events(
     w_start = _mapping.parse_instant(start)
     w_end = _mapping.parse_instant(end)
     _mapping.validate_window(w_start, w_end)
+    if isinstance(calendars, str):  # a bare string would be read as one selector per character
+        raise InvalidQueryError("calendars must be a list of selectors, not a single string")
     if calendars is not None and len(calendars) == 0:
         raise InvalidQueryError("calendars=[] selects nothing; pass None for all calendars")
     source = get_source()
