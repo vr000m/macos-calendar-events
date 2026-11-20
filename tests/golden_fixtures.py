@@ -96,7 +96,17 @@ def build_window_fixture() -> CliFixture:
             end_local=(2025, 11, 19, 23, 59, 59),
             status=0,
         ),
-        # canceled, outside the padded window: filtered out
+        # canceled inside the unpadded window: returned with status canceled (R5)
+        raw_event(
+            "2025-11-19T16:40:00Z",
+            "2025-11-19T16:50:00Z",
+            calendar_id="cal-home",
+            external_id="ext-canceled",
+            event_identifier="evt-canceled",
+            title="Canceled check-in",
+            status=3,
+        ),
+        # canceled, outside the padded window (ends after 17:15Z start): filtered by overlap
         raw_event(
             "2025-11-19T17:30:00Z",
             "2025-11-19T18:00:00Z",
