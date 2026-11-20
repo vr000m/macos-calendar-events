@@ -132,7 +132,7 @@ get wrong, so use absolute paths everywhere (replace `<you>`):
 Run the CLI as a subprocess, by absolute path, with a timeout (10 s is generous: a cold
 query takes about 0.3 s, and the first launch of a fresh install about 1.6 s).
 
-- Read JSON from stdout; never parse stderr.
+- Read JSON from stdout only on exit 0; never parse stderr.
 - Treat **any** failure as "no calendar hints", never as fatal for your own pipeline: a
   non-zero exit, a signal, a timeout, a missing executable, invalid JSON, a schema mismatch,
   or a `schema_version` other than 1.
@@ -163,23 +163,29 @@ import json
 import subprocess
 from typing import Any
 
-import jsonschema  # third-party: pip install jsonschema
+import jsonschema  # third-party: pip install "jsonschema[format-nongpl]" (date-time checks)
 
 CLI = "/Users/<you>/.local/bin/macos-calendar-events"
+
+
+def _not_json(name: str) -> Any:
+    raise ValueError(name)  # Python's json accepts NaN and Infinity; JSON does not
 
 
 def _cli_json(*args: str) -> Any:
     proc = subprocess.run([CLI, *args], capture_output=True, timeout=10, check=False)
     if proc.returncode != 0:
         raise RuntimeError(f"exit {proc.returncode}")
-    return json.loads(proc.stdout)
+    return json.loads(proc.stdout, parse_constant=_not_json)
 
 
 def calendar_hints(start: int, end: int) -> list[dict] | None:
     try:
         schema = _cli_json("schema", "window-v1")  # cache this if you call often
         doc = _cli_json("window", "--start", str(start), "--end", str(end), "--pad-minutes", "15")
-        jsonschema.validate(doc, schema)  # also checks schema_version == 1 (const)
+        # format_checker: dates are checked too (by default `format` is not enforced);
+        # the schema also pins schema_version == 1 (const)
+        jsonschema.validate(doc, schema, format_checker=jsonschema.FormatChecker())
         return doc["events"]
     except Exception:  # any failure means no hints, never a crash
         return None
@@ -225,7 +231,9 @@ reflect the Mac's time zone at query time. A full example lives in
 | 4 | EventKit unavailable: not macOS, macOS older than 14, or PyObjC missing |
 | 5 | A `--calendar` selector matched nothing |
 
-Every non-zero exit leaves stdout empty.
+Use stdout only on exit 0. Every non-zero exit leaves stdout empty, except an exit 1 from a
+stdout write that fails partway (for example a full non-blocking pipe or a full disk), which
+can leave a truncated prefix.
 
 ## Python API
 

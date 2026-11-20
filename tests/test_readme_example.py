@@ -78,6 +78,13 @@ def test_no_events_is_an_empty_list(monkeypatch: pytest.MonkeyPatch) -> None:
         _doc(events=[{"id": "x"}]),  # an event without its required keys
         _doc(events=[{**_EVENT, "start_ts": "1763568000"}]),  # a retyped field
         _doc(events=[{**_EVENT, "attendees": None}]),
+        # pattern-valid but not real dates: only a format checker rejects them
+        _doc(events=[{**_EVENT, "start": "2025-02-30T12:00:00Z"}]),
+        _doc(events=[{**_EVENT, "start": "2025-13-45T99:99:99Z"}]),
+        _doc(events=[{**_EVENT, "start_date": "yesterday"}]),
+        _doc(window={**GOLDEN["window"], "end": "2025-11-31T00:00:00Z"}),
+        _doc(extra=float("nan")),  # not JSON, even in a field the schema doesn't name
+        _doc(extra=float("inf")),
         _doc(events={}),
         _doc(events=_MISSING),
         _doc(window=_MISSING),
