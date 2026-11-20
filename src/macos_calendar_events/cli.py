@@ -6,10 +6,10 @@ writes exactly one stderr line; stdout is written once, only after the output is
 Every stdout write, ``--help`` and ``--version`` included, goes through ``_emit``: exit 0
 only when every byte was written, else exit 1. A write that fails partway (for example a
 full non-blocking pipe or a full disk) can leave a prefix of the output. Best effort: when
-stdout is a regular file the CLI was extending (``> file``), the bytes it added beyond the
-file's original end are removed, but only if the file has not changed since; an append-mode
-(``>>``) or overwritten (``1<>``) file, or a pipe, may keep a prefix. Stdout is valid only on
-exit 0.
+stdout is a regular file the CLI was extending exactly at its end (``> file``), the bytes it
+added are removed if the file is still exactly the length the CLI left it; a same-length
+rewrite by another writer, an append-mode (``>>``) or overwritten (``1<>``) or past-EOF file,
+or a pipe, may keep a prefix. Stdout is valid only on exit 0.
 """
 
 from __future__ import annotations
@@ -100,8 +100,9 @@ def _write_stdout(data: bytes) -> None:
     no process-wide state is changed). A write that accepts no bytes (``None`` from a full
     non-blocking pipe, or 0) raises instead of being mistaken for success. Bytes already
     accepted stay written, so a write that fails partway can leave a prefix. The one undo is
-    best effort (see :func:`_undo_partial_write`): bytes this call added beyond a regular
-    file's original end are removed when nothing else has changed the file since.
+    best effort (see :func:`_undo_point`, :func:`_undo_partial_write`): when this call was
+    extending a regular file exactly at its end, the bytes it added are removed if the file is
+    still exactly the length this call left it.
 
     A text-only stdout with no ``buffer`` (an in-process ``redirect_stdout(io.StringIO())``)
     gets the same UTF-8 text, with short writes continued and 0 a failure; ``None`` there is
@@ -138,13 +139,17 @@ def _write_stdout(data: bytes) -> None:
         raise
 
 
-def _undo_point(out: Any) -> tuple[int, int, int] | None:
-    """``(fd, start, size_before)`` taken before writing, when a failed write can be undone.
+def _undo_point(out: Any) -> tuple[int, int] | None:
+    """``(fd, start)`` taken before writing, when a failed write can be undone.
 
-    Only for a regular file this call extends: not append mode (another writer may append at
-    any time) and not a write over existing bytes (``start < size_before``; they can't be put
-    back). ``None`` otherwise, and for a pipe, terminal or in-memory stream, or a platform
-    without ``fcntl`` (Windows), where the mode can't be read.
+    Only for a regular file this call extends exactly at its end (``start == st_size``): not
+    append mode (another writer may append at any time), not a write over existing bytes
+    (``start < st_size``; they can't be put back), and not past the end (``start > st_size``;
+    another writer's bytes in the gap would be cut with ours). The offset is read before the
+    size, so a writer that extends the file between the two reads makes them differ (no
+    undo). ``None`` otherwise, and for a pipe,
+    terminal or in-memory stream, or a platform without ``fcntl`` (Windows), where the mode
+    can't be read.
     """
     try:
         import fcntl
@@ -152,33 +157,31 @@ def _undo_point(out: Any) -> tuple[int, int, int] | None:
         return None
     try:
         fd = out.fileno()
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            return None
         if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND:
             return None
-        start = os.lseek(fd, 0, os.SEEK_CUR)
+        start = os.lseek(fd, 0, os.SEEK_CUR)  # before the size: see above
+        info = os.fstat(fd)
     except (AttributeError, OSError, ValueError):
         return None
-    if start < info.st_size:
+    if not stat.S_ISREG(info.st_mode) or start != info.st_size:
         return None
-    return fd, start, info.st_size
+    return fd, start
 
 
-def _undo_partial_write(fd: int, start: int, size_before: int, written: int) -> None:
-    """Remove the ``written`` bytes this call put at ``start`` (>= ``size_before``).
+def _undo_partial_write(fd: int, start: int, written: int) -> None:
+    """Remove the ``written`` bytes this call appended at ``start``, the original end of file.
 
-    Invariant: only bytes beyond the original end of file go, and only when the file is
-    exactly ``start + written`` long, i.e. nothing else has grown it since; the file is cut to
-    ``size_before`` (no zero-filled gap is left when ``start`` was past the end) and the
-    offset goes back to ``start``. Best effort: a writer racing this check can still lose
-    bytes, and an error here leaves the prefix; the original write error is the one reported.
+    Invariant: the file is cut back to ``start`` (its length before the write) and the offset
+    put back there, only when the file is exactly ``start + written`` long. Only the length is
+    checked, so this is best effort: another writer that rewrote bytes above ``start`` without
+    changing the length, or that races this check, loses them; an error here leaves the
+    prefix. The original write error is the one reported.
     """
     if not written:
         return
     try:
         if os.fstat(fd).st_size == start + written:
-            os.ftruncate(fd, size_before)
+            os.ftruncate(fd, start)
             os.lseek(fd, start, os.SEEK_SET)
     except OSError:
         pass

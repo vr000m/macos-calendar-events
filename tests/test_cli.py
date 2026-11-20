@@ -646,8 +646,8 @@ def test_stdout_writer_exit_0_only_when_every_byte_is_written(
 class _FileRaw:
     """A raw stream over a real fd: ``fail_after`` bytes are written, then ``write`` raises.
 
-    ``grow`` simulates another writer: after this stream's first write call (or before it
-    raises, if it writes nothing) ``grow`` is appended to the file through its own fd.
+    ``grow`` simulates another writer: it runs once, after this stream's first write call (or
+    before it raises, if it writes nothing), and writes to the file through its own fd.
     """
 
     def __init__(
@@ -693,18 +693,25 @@ class _FileStdout:
 _OTHER = b"OTHER WRITER\n"
 
 # Regular-file stdout layouts: (initial file, open flags, offset, another writer, undoable).
-# Undo invariant: only bytes beyond the file's original end are removed, only when the CLI
-# was extending the file (not O_APPEND, offset >= size), and only if nobody else changed it.
-_LAYOUTS: dict[str, tuple[bytes, int, int, bool, bool]] = {
-    "truncate": (b"old", os.O_WRONLY | os.O_TRUNC, 0, False, True),  # `> file`
-    "empty": (b"", os.O_WRONLY, 0, False, True),
-    "at_eof": (b"abc", os.O_WRONLY, 3, False, True),  # `{ echo abc; cmd; } > file`
-    "past_eof": (b"abc", os.O_WRONLY, 100, False, True),  # no zero-filled gap left behind
-    "append_start": (b"abc", os.O_WRONLY | os.O_APPEND, 0, False, False),  # `>> file`
-    "append_eof": (b"abc", os.O_WRONLY | os.O_APPEND, 3, False, False),
-    "overwrite_within": (b"x" * 100, os.O_RDWR, 3, False, False),  # `1<> file`
-    "overwrite_extends": (b"0123456789", os.O_RDWR, 3, False, False),
-    "grown": (b"", os.O_WRONLY, 0, True, False),  # another `>>` writer appends meanwhile
+# Another writer: None; "append" (a `>>` writer appends _OTHER); "gap" (_OTHER is pwritten
+# at the original end, inside the gap before an offset past it); "rewrite" (_OTHER is
+# pwritten over the CLI's first bytes, same length). Undo invariant: the CLI's bytes are
+# removed only when it was extending the file exactly at its end (not O_APPEND, offset ==
+# size, offset read before size) and the file is still exactly the length it left it.
+_LAYOUTS: dict[str, tuple[bytes, int, int, str | None, bool]] = {
+    "truncate": (b"old", os.O_WRONLY | os.O_TRUNC, 0, None, True),  # `> file`
+    "empty": (b"", os.O_WRONLY, 0, None, True),
+    "at_eof": (b"abc", os.O_WRONLY, 3, None, True),  # `{ echo abc; cmd; } > file`
+    "past_eof": (b"abc", os.O_WRONLY, 100, None, False),  # a gap writer's bytes would go too
+    "past_eof_gap_filled": (b"abc", os.O_WRONLY, 100, "gap", False),
+    "append_start": (b"abc", os.O_WRONLY | os.O_APPEND, 0, None, False),  # `>> file`
+    "append_eof": (b"abc", os.O_WRONLY | os.O_APPEND, 3, None, False),
+    "overwrite_within": (b"x" * 100, os.O_RDWR, 3, None, False),  # `1<> file`
+    "overwrite_extends": (b"0123456789", os.O_RDWR, 3, None, False),
+    "grown": (b"", os.O_WRONLY, 0, "append", False),  # another `>>` writer appends meanwhile
+    # Documented best-effort residual: only the length is checked, so a same-length rewrite
+    # of the CLI's bytes is cut with them.
+    "rewritten_same_length": (b"abc", os.O_WRONLY, 3, "rewrite", True),
 }
 _K = 20  # "fail after k bytes"; the schema output is far longer
 
@@ -726,9 +733,12 @@ def test_failed_write_to_a_regular_file_undo_state_space(
     before = target.read_bytes()  # after O_TRUNC
 
     def grow() -> None:
-        other_fd = os.open(target, os.O_WRONLY | os.O_APPEND)
+        other_fd = os.open(target, os.O_WRONLY | (os.O_APPEND if other == "append" else 0))
         try:
-            os.write(other_fd, _OTHER)
+            if other == "append":
+                os.write(other_fd, _OTHER)
+            else:  # "gap" / "rewrite": in place, the file's length is left unchanged
+                os.pwrite(other_fd, _OTHER, len(before) if other == "gap" else seek)
         finally:
             os.close(other_fd)
 
@@ -745,15 +755,18 @@ def test_failed_write_to_a_regular_file_undo_state_space(
 
     # What the file holds if nothing is undone: our bytes at the write position (the end
     # for O_APPEND, a zero-filled gap before an offset past the end, if any byte was
-    # written), then the other writer.
+    # written), then the other writer's bytes where it put them.
     written = ours if fail_after is None else ours[:fail_after]
     at = len(before) if flags & os.O_APPEND else seek
     kept = bytearray(before)
     if written:
         kept = kept.ljust(at, b"\0")
         kept[at : at + len(written)] = written
-    if other:
+    if other == "append":
         kept += _OTHER
+    elif other is not None:
+        place = len(before) if other == "gap" else seek
+        kept[place : place + len(_OTHER)] = _OTHER
 
     if fail_after is None:  # success never truncates
         assert (code, err) == (0, "")
@@ -766,6 +779,67 @@ def test_failed_write_to_a_regular_file_undo_state_space(
         assert offset_after == seek  # and the offset is put back
     else:
         assert content == bytes(kept)
+
+
+class _OsBetweenReads:
+    """``os`` for ``cli``, where another writer sharing the stdout fd's open file description
+    (``{ writer & cmd; } > file``) writes right after the first of ``_undo_point``'s two
+    reads (the offset and the size), whichever order they run in."""
+
+    def __init__(self, fd: int, shared_fd: int) -> None:
+        self.fd, self.shared_fd, self.fired = fd, shared_fd, False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(os, name)
+
+    def _between(self) -> None:
+        if not self.fired:
+            self.fired = True
+            os.write(self.shared_fd, _OTHER)  # moves the shared offset too
+
+    def lseek(self, fd: int, pos: int, how: int) -> int:
+        result = os.lseek(fd, pos, how)
+        if fd == self.fd and (pos, how) == (0, os.SEEK_CUR):
+            self._between()
+        return result
+
+    def fstat(self, fd: int) -> os.stat_result:
+        result = os.fstat(fd)
+        if fd == self.fd:
+            self._between()
+        return result
+
+
+@pytest.mark.parametrize("fail_after", [0, _K, None], ids=["fail_first", "fail_after_k", "ok"])
+def test_writer_between_the_offset_and_size_reads_keeps_its_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+    fail_after: int | None,
+) -> None:
+    """The shared writer's bytes land at the original end, before the CLI's: they are kept.
+    Round 5 read the size first and accepted an offset past it, so it cut them."""
+    from macos_calendar_events import cli
+
+    ours = _expected_stdout(["schema", "window-v1"])
+    target = tmp_path / "out.json"
+    target.write_bytes(b"abc")
+    fd = os.open(target, os.O_WRONLY)
+    shared_fd = os.dup(fd)
+    try:
+        os.lseek(fd, 3, os.SEEK_SET)
+        fake_os = _OsBetweenReads(fd, shared_fd)
+        monkeypatch.setattr(cli, "os", fake_os)
+        monkeypatch.setattr(sys, "stdout", _FileStdout(fd, fail_after))
+        code = main(["schema", "window-v1"], source=source())
+    finally:
+        os.close(shared_fd)
+        os.close(fd)
+    assert fake_os.fired
+    written = ours if fail_after is None else ours[:fail_after]
+    assert code == (0 if fail_after is None else 1)
+    capsys.readouterr()
+    assert target.read_bytes() == b"abc" + _OTHER + written
 
 
 @pytest.mark.parametrize("fail_after", [0, _K, None], ids=["fail_first", "fail_after_k", "ok"])
