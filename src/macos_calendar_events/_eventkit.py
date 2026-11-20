@@ -98,8 +98,14 @@ def _load_namespace() -> EventKitNamespace:
 
 
 def _text(value: Any) -> str | None:
-    # Every NSString crosses the Raw* boundary as valid Unicode (no lone surrogates).
+    # Every text NSString crosses the Raw* boundary as valid Unicode (no lone surrogates).
     return None if value is None else _mapping.unicode_text(str(value))
+
+
+def _identifier(value: Any) -> str | None:
+    # Calendar identifiers are lookup keys (calendarWithIdentifier_), so they cross unchanged;
+    # _mapping cleans them where they become output.
+    return None if value is None else str(value)
 
 
 def _epoch(ns_date: Any) -> float | None:
@@ -157,7 +163,7 @@ class EventKitSource:
     def _calendar(self, cal: Any) -> RawCalendar:
         source = cal.source()
         return RawCalendar(
-            id=_mapping.unicode_text(str(cal.calendarIdentifier())),
+            id=str(cal.calendarIdentifier()),  # lossless: events() looks it up again
             title=_text(cal.title()),
             source_title=None if source is None else _text(source.title()),
             source_type=-1 if source is None else int(source.sourceType()),
@@ -197,7 +203,7 @@ class EventKitSource:
         zone = ev.timeZone()
         organizer = ev.organizer()
         return RawEvent(
-            calendar_id=None if cal is None else _text(cal.calendarIdentifier()),
+            calendar_id=None if cal is None else _identifier(cal.calendarIdentifier()),
             external_id=_text(ev.calendarItemExternalIdentifier()),
             event_identifier=_text(ev.eventIdentifier()),
             title=_text(ev.title()),

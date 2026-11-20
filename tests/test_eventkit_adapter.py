@@ -316,3 +316,53 @@ def test_lone_surrogates_in_eventkit_text_still_serialize_as_utf8(
     ):
         assert main(argv, source=source) == 0
         assert capsys.readouterr().err == ""
+
+
+# --- calendar ids: lossless for lookup, cleaned for output ----------------------------
+
+ID_KINDS = {
+    "ascii": "cal-1",
+    "astral": "cal-\U0001f600",
+    "lone_high": "cal-" + LONE_HIGH,
+    "lone_low": "cal-" + LONE_LOW,
+}
+
+
+@pytest.mark.parametrize("kind", sorted(ID_KINDS))
+@pytest.mark.parametrize("select", ["all", "title", "listed_id"])
+def test_calendar_id_round_trips_through_the_store_lookup(kind: str, select: str) -> None:
+    from macos_calendar_events import _api
+    from macos_calendar_events._mapping import unicode_text
+
+    raw_id = ID_KINDS[kind]
+    cal = calendar(raw_id, title="Work")
+    source, factory = _source(calendars=[cal], events=[event(cal)])
+    [listed] = _api.query_calendars(lambda: source, prompt=False)
+    assert listed.id == unicode_text(raw_id)
+    listed.id.encode("utf-8")  # output ids are always valid UTF-8
+    selectors = {"all": None, "title": ["Work"], "listed_id": [listed.id]}[select]
+    result = _api.query_events(
+        lambda: source, START, END, calendars=selectors, include_notes=False, prompt=False
+    )
+    [ev] = result.events
+    assert ev.calendar.id == listed.id
+    assert ev.calendar.title == "Work"  # the raw-id join found the calendar record
+    calendars_passed = factory.built[-1].predicates[-1][2]
+    assert calendars_passed == (None if select == "all" else [cal])
+
+
+def test_calendar_ids_equal_after_cleaning_are_both_selected() -> None:
+    from macos_calendar_events import _api
+
+    first = calendar("cal-" + LONE_HIGH, title="A")
+    second = calendar("cal-" + LONE_LOW, title="B")
+    rows = [event(first, eventIdentifier="e1"), event(second, eventIdentifier="e2")]
+    source, factory = _source(calendars=[first, second], events=rows)
+    listed = _api.query_calendars(lambda: source, prompt=False)
+    assert [c.id for c in listed] == ["cal-�", "cal-�"]
+    result = _api.query_events(
+        lambda: source, START, END, calendars=["cal-�"], include_notes=False, prompt=False
+    )
+    assert sorted(e.calendar.title or "" for e in result.events) == ["A", "B"]
+    assert len({e.id for e in result.events}) == 2
+    assert factory.built[-1].predicates[-1][2] == [first, second]

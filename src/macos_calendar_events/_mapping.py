@@ -271,7 +271,11 @@ def normalize_all_day(
 def select_calendars(
     cals: Sequence[RawCalendar], selectors: Sequence[str] | None
 ) -> list[RawCalendar]:
-    """R6: id match first, else casefolded title match; every selector must match."""
+    """R6: id match first, else casefolded title match; every selector must match.
+
+    Selectors are compared with the output id (:func:`unicode_text` of the raw id); the
+    returned records keep their raw ids for the adapter's lookup.
+    """
     if selectors is None:
         return list(cals)
     if len(selectors) == 0:
@@ -279,7 +283,7 @@ def select_calendars(
     chosen: set[str] = set()
     unmatched: list[str] = []
     for selector in selectors:
-        by_id = [c.id for c in cals if c.id == selector]
+        by_id = [c.id for c in cals if unicode_text(c.id) == selector]
         if by_id:
             chosen.update(by_id)
             continue
@@ -297,7 +301,7 @@ def select_calendars(
 
 def map_calendar(raw: RawCalendar) -> CalendarInfo:
     return CalendarInfo(
-        id=raw.id,
+        id=unicode_text(raw.id),
         title=raw.title,
         source_title=raw.source_title,
         source_type=source_type_from_int(raw.source_type),
@@ -417,7 +421,8 @@ def to_events(
 ) -> MappedEvents:
     """Map -> skip (R3) -> overlap filter -> ids -> sort by ``(start, end, calendar.id, id)``.
 
-    ``calendars`` supplies the title and source title for each row's ``CalendarRef``.
+    ``calendars`` (keyed by raw id) supplies the title and source title for each row's
+    ``CalendarRef``; the ref's id is the cleaned output id.
     """
     w_start, w_end = window
     known = calendars or {}
@@ -429,7 +434,7 @@ def to_events(
             continue
         cal = known.get(row.calendar_id)
         ref = CalendarRef(
-            id=row.calendar_id,
+            id=unicode_text(row.calendar_id),
             title=None if cal is None else cal.title,
             source_title=None if cal is None else cal.source_title,
         )

@@ -2,6 +2,12 @@
 
 Values are raw EventKit facts: epoch floats, local date-time components for all-day
 events, enum ints, strings and ``None``. All decisions happen in ``_mapping``.
+
+Text fields are valid Unicode (the adapter replaces unpaired UTF-16 surrogates with
+U+FFFD). Calendar identifiers (``RawCalendar.id``, ``RawEvent.calendar_id``) are the
+exact EventKit strings instead: they are keys for joins and for the adapter's
+``calendarWithIdentifier_`` lookup, so ``_mapping`` cleans them only where they become
+output (``CalendarInfo.id``, ``CalendarRef.id``) or are compared with a caller selector.
 """
 
 from __future__ import annotations
