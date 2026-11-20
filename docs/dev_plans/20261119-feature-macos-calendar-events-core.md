@@ -970,6 +970,22 @@ Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by tick
   - Cap consistency (2024-01-01 + 1093 d): single query 3545 distinct keys, union of three chunks 3545, symmetric difference 0.
   - The job was removed afterwards. Nothing was written to the repo.
 
+**Phase 5a**
+- CLI stderr lines:
+  - exit 1: `internal error: <Class>`;
+  - exit 2 (`InvalidQueryError`): `macos-calendar-events: error: <message>`; argparse errors, including `--pad-minutes -1` via `parser.error`, print argparse's usage block;
+  - exit 3: exactly the R9 remediation text;
+  - exits 4 and 5: `macos-calendar-events: <message>`.
+  - A multi-line message is joined into one line before writing.
+- `main()` resolves the source lazily, as `source` or `_eventkit.default_source()` at call time, so tests can monkeypatch `default_source`.
+- `tests/golden_fixtures.py` builders return `CliFixture(argv, source)`.
+  - The window fixture covers: epoch input with `--pad-minutes 15`; an event that only falls inside the padding; a non-ASCII title; an organizer who is also in `attendees` (plus a room and a tentative self attendee); a nil-attendees, nil-identifier floating event; an all-day event with an inclusive 23:59:59 end; and a canceled event outside the padded window.
+  - The calendars fixture has three calendars, including a null `source_title`, a null color and a read-only calendar.
+- `scripts/regen_goldens.py` exposes `render_all()`. `test_cli.py` renders through it in memory and schema-validates the result, but never writes. **The goldens were not generated or committed** (`tests/golden/` doesn't exist).
+- The non-darwin subprocess test (`python -m macos_calendar_events.cli calendars` → 4) is skipped on darwin and runs on ubuntu CI. A simulated variant (a subprocess that sets `sys.platform = "linux"` before calling `main`) runs everywhere.
+- Locally, the suite and mypy pass on 3.11, 3.12.7 and 3.13, each in its own temp env. The ubuntu (no PyObjC) job hasn't run, because nothing was pushed.
+- **Review slot (user-run):** `uv run python scripts/regen_goldens.py`; hand-review `tests/golden/window-v1.json` and `tests/golden/calendars-v1.json`; add a CHANGELOG line; commit; then `/conduct --resume` for 5b.
+
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
 This was an author-side pass over skein `review-plan`'s five lenses plus its contradiction pass, run inline by the author instead of in fresh-context agents. **It doesn't replace `/review-plan`. Run that before `/conduct`.** It doesn't write the review marker.
