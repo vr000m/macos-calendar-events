@@ -48,7 +48,7 @@ if [ -f "$allow" ]; then
 fi
 if [ "$used" != "$allowed" ]; then
     echo "[allowlist] selectors used in _eventkit.py differ from scripts/eventkit_selectors.allow:" >&2
-    diff <(printf '%s\n' "$allowed") <(printf '%s\n' "$used") | grep -E '^[<>]' | sed 's/^</  stale (allowed, unused):/; s/^>/  missing (used, not allowed):/' >&2
+    diff <(printf '%s\n' "$allowed") <(printf '%s\n' "$used") | grep -E '^[<>] .' | sed 's/^</  stale (allowed, unused):/; s/^>/  missing (used, not allowed):/' >&2
     fail=1
 fi
 
