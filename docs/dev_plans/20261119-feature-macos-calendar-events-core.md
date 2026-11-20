@@ -17,7 +17,7 @@ Ship an open-source Python package, `macos-calendar-events` (import name `macos_
 
 - **Motivation (consumer, not scope):** koda-pipecat records meetings, diarizes speakers (S1, S2, …), and post-processes each session. It wants to fetch calendar events in a fuzzy window around a recording (for example ±15 min), work out which of several overlapping meetings was actually attended, and use the invitee list as a *non-normative* hint, mostly for spelling speaker names. koda-pipecat integrates by **running the CLI as a subprocess** with a timeout and parsing its versioned JSON. It doesn't import this library, so the two repos share only the CLI and JSON contract (R18). All of that ranking, matching, and LLM reconciliation stays in koda-pipecat. This package only answers "what events overlap [start, end)?" accurately and completely.
 - **Why a separate repo:** it's reusable outside koda, it's open source, and it keeps PyObjC/EventKit and macOS privacy (TCC) concerns out of the consumer.
-- **Data reality (assumption, checked in Phase 0):** the user's Calendar.app aggregates several accounts (work Exchange/Google, personal iCloud, shared and subscribed calendars). The default `EKEventStore` is assumed to expose them all, so "all calendars" is the default. Delegate calendars (`delegateSources`) may be excluded. Phase 0 measures this, and any gap becomes a documented limitation.
+- **Data reality (assumption, checked in Phase 0):** the user's Calendar.app aggregates several accounts (work Exchange/Google, personal iCloud, shared and subscribed calendars). The default `EKEventStore` is assumed to expose them all, so "all calendars" is the default. *Phase 0:* the default store exposed 16 calendars (CalDAV, subscribed, birthdays), and all 15 `delegateSources` were already among the default store's sources, so delegate calendars need no special handling. Phase 0 measures this, and any gap becomes a documented limitation.
 - **Repo state (snapshot 2026-11-19 15:30 PST):** branch `feature/core-events-api` (from `main` at `4568144 Initial commit`), containing plan commits plus a `.gitignore` update that ignores `/.review-plan`. Files: `LICENSE` (**BSD 2-Clause**, © 2026 Varun Singh), stock Python `.gitignore` (ignores `.venv`, `.mypy_cache`; does not ignore `uv.lock`, which doesn't exist yet and is committed in Phase 1), this plan. No `pyproject.toml` yet.
 - **Dev machine:** macOS 26.6.2. Two uv binaries are installed: `/opt/homebrew/bin/uv` 0.13.9 and `~/.local/bin/uv` 0.9.18. Which one `uv` resolves to depends on the shell's PATH: interactive login shells resolve Homebrew's first, while non-login shells (including agent shells that run phase gates) resolve `~/.local/bin` first. Phase 1 pins `[tool.uv] required-version = ">=0.9"` and runs `uv lock --check` with both binaries by absolute path, so either works. Latest `pyobjc-framework-EventKit` on PyPI is 13.0 (`requires_python >=3.11`).
 
@@ -39,7 +39,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - Content: `title`, `location`, `url`, `notes` (only when `include_notes=True`, else `None`).
   - Time: `start`, `end` (UTC instants, end exclusive, serialized `…Z` with whole seconds), `all_day`, `start_date` / `end_date` (calendar dates `YYYY-MM-DD`, end exclusive, set only for all-day events, otherwise `None`; derived by the pure `_mapping.normalize_all_day` from local date components the adapter captures), `time_zone` (informational only). For all-day and floating events, the UTC `start`/`end` instants reflect the Mac's system time zone at query time; consumers should use `start_date`/`end_date` for all-day events. For all-day events, an EventKit end of local `23:59:59` is normalized to the next local midnight (+1 s), so both `end` and `end_date` are exclusive (Phase 0 confirms the raw representation).
   - State: `status`, `is_recurring` (`hasRecurrenceRules or isDetached`), `is_detached`, `occurrence_start`.
-  - People and calendar: `organizer: Participant | None`, `attendees: tuple[Participant, ...]`, `self_status: ParticipationStatus | None`, `calendar: CalendarRef`.
+  - People and calendar: `organizer: Participant | None`, `attendees: tuple[Participant, ...]`, `self_status: ParticipationStatus | None`, `calendar: CalendarRef`. The organizer may also appear in `attendees` (Phase 0 observed this); the library passes both through without deduping.
 
   Nullability is decided up front, because R18 forbids retyping later. The type sketch is authoritative. Nullable: `title`, `event_identifier`, `time_zone`, `external_id`, `location`, `url`, `notes`, `start_date`, `end_date`, `organizer`, `self_status`, `calendar.source_title`, `calendar.title`, and participant `name`/`email`/`url`. Non-null: `calendar.id`, `start`, `end`, `occurrence_start`. An event whose EventKit `startDate`, `endDate` or calendar identifier is nil is **skipped**, never emitted with a placeholder. `occurrence_start` falls back to `start`, so it can only be missing when `start` is. The pure `_mapping.to_events` does the skipping and reports a skip count, which Phase 0 and the live smoke record. `time_zone` is "IANA name when available, otherwise EventKit's raw zone name, `None` for floating". `occurrence_start` falls back to `start` when `occurrenceDate` is nil.
 - R4. `Participant`:
@@ -65,9 +65,10 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 ### Permissions (TCC)
 - R9. Access API:
   - `authorization_status() -> AccessStatus` returns `not_determined | restricted | denied | full_access | write_only | unknown`. The EventKit int is mapped in `_mapping`, and unknown ints become `unknown`.
-  - `request_access(timeout=60.0) -> AccessStatus` uses `requestFullAccessToEventsWithCompletion_` only. `requestAccessToEntityType_completion_` is never called (R19). The wait is the pure helper `_access.wait_for_access(request, read_status, timeout, wait=…)`. It takes an injected requester and an injected waiter. The waiter defaults to `threading.Event.wait`; the adapter passes a run-loop-pumping waiter if Phase 0 requires one. If the completion never fires within `timeout`, it returns the current status.
+  - `request_access(timeout=60.0) -> AccessStatus` uses `requestFullAccessToEventsWithCompletion_` only. `requestAccessToEntityType_completion_` is never called (R19). The wait is the pure helper `_access.wait_for_access(request, read_status, timeout, wait=…)`. It takes an injected requester and an injected waiter. The waiter defaults to `threading.Event.wait`, and the adapter uses that default. Phase 0 showed the completion fires on a background thread with no run loop pumped, both from a terminal and under launchd. The waiter seam stays for tests. If the completion never fires within `timeout`, it returns the current status.
   - Reads gate on access (timeout `_api.ACCESS_TIMEOUT_S = 60.0`): `full_access` passes; `not_determined` with `prompt=True` requests once, then re-checks; anything else, including still `not_determined` after the request, raises `CalendarAccessError(status)`.
-  - Remediation text is generic: "grant Calendar access to the app that launched this process (for example Terminal, iTerm2, VS Code) in System Settings → Privacy & Security → Calendars" (wording confirmed against Phase 0's System Settings check). The package doesn't try to detect the responsible app. `write_only` counts as denied for reads.
+  - Remediation text is generic, and was revised after Phase 0's System Settings check showed apps can't be added manually: "Calendar access is granted per launching context. Run `macos-calendar-events calendars --prompt` once from the same context (the same terminal app, or the same launchd job/interpreter), or enable an existing entry in System Settings → Privacy & Security → Calendars".
+  - **TCC attribution (Phase 0):** TCC attributes access to the *responsible process*. For a process started from a terminal, that's the terminal app. For a launchd job and all of its children, it's the job's executable (for a uv-managed Python, the interpreter binary's realpath). A terminal grant does not carry over to launchd jobs. The package doesn't try to detect the responsible app. `write_only` counts as denied for reads.
 - R10. No writes, ever. Enforced by `scripts/check_readonly.sh` in CI:
   - `grep -rnE` over `src/` for a denylist: `saveEvent|removeEvent|saveCalendar|removeCalendar|saveReminder|removeReminder|commit_?\(|requestWriteOnlyAccess|requestAccessToEntityType`, plus `\.reset\(`. `reset` is never called (store lifetime rule, Phase 4).
   - Grep's exit code is interpreted strictly: `1` (no match) is a pass, `0` (match) is a fail, and anything else (for example `2` for an unreadable path) is a fail.
@@ -161,7 +162,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
   - `EKSourceType`, `EKCalendar.allowsContentModifications`, `EKCalendar.color`.
   - Whether a store created before the grant returns data after it.
 - **TCC attribution:** a CLI run from Terminal is attributed to the *responsible app* (Terminal, iTerm2, VS Code; cron or launchd → none). Because koda runs the CLI as a **subprocess**, attribution follows koda's own responsible process: a Terminal-launched koda, or a launchd agent with no app. The prompt needs `NSCalendarsFullAccessUsageDescription` in the responsible app's Info.plist. **This is the highest risk and is de-risked in Phase 0 before any design is frozen.**
-- **Completion-handler threading:** the completion block fires on an arbitrary queue. `_access.wait_for_access` blocks on `threading.Event` with a timeout; Phase 0 decides whether an `NSRunLoop` must be pumped.
+- **Completion-handler threading:** the completion block fires on an arbitrary queue. `_access.wait_for_access` blocks on `threading.Event` with a timeout. Phase 0 confirmed that no `NSRunLoop` pumping is needed.
 - **Time:** UTC-only input (integer epoch seconds or RFC 3339 `Z`/`+00:00`) and output (strings plus `_ts` epochs) (R12); RFC 3339 `…Z` with whole seconds; DST transitions; floating (no-tz) events; all-day `start_date`/`end_date` exclusivity; ±1-day query widening (R13); `time_zone` passed through as informational, including non-IANA names such as `GMT+0530`.
 - **Cross-repo contract:** JSON Schema draft 2020-12 with format checking, additive-only evolution within `schema_version` 1.
 - **Formats:** RFC 6068 (`mailto:`), RFC 3986 scheme case-insensitivity, RFC 2606 fixture domains.
@@ -407,7 +408,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - `EventKitNamespace` bundles everything class-level the adapter needs: the store class, `EKEntityTypeEvent`, `NSCalendar`, `NSTimeZone`, and the sRGB color converter. The default is built from the real modules, and tests inject a stub namespace;
   - **store lifetime:** the store is created lazily on first use; after a `request_access` that returns `full_access`, the source discards it and builds a fresh store; `reset` is never called (Phase 0 may relax this to a single store if before/after counts match);
   - `authorization_status()` returns the raw int;
-  - `request_access(timeout)` calls `_access.wait_for_access` with `store.requestFullAccessToEventsWithCompletion_`, using the run-loop strategy from Phase 0;
+  - `request_access(timeout)` calls `_access.wait_for_access` with `store.requestFullAccessToEventsWithCompletion_`, with the default `threading.Event.wait` waiter (Phase 0: no run-loop pumping needed);
   - `calendars()` uses `calendarsForEntityType_(EKEntityTypeEvent)`, with NSColor → sRGB via `colorUsingColorSpace_(NSColorSpace.sRGBColorSpace())`, `None` on failure;
   - `events(start, end, calendar_ids)` queries **exactly** the range it receives (`_api` already widened it). It resolves ids via `calendarWithIdentifier_`; `calendar_ids=None` means all, and a non-None list that resolves to zero calendars returns `[]` without querying.
 - Getters only, no decisions:
@@ -486,7 +487,17 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - what/why (consumer use case in one paragraph, ranking explicitly out of scope);
   - **requirements: macOS 14 Sonoma+**;
   - install: `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0`, with the CLI landing in `~/.local/bin`, and a note that launchd's PATH lacks `~/.local/bin`, so callers should use the absolute path;
-  - permission walkthrough: the generic responsible-app explanation, the System Settings path, the one-time grant via `macos-calendar-events calendars --prompt` run from Terminal, and how to reset during development with `tccutil reset Calendar <bundle-id>` (run by the user, never by the tool);
+  - permission walkthrough, covering:
+    - **Grant from the context that will run the CLI.** TCC keys the grant to the responsible process: the terminal app when run from a terminal, or the launchd job's executable when run under launchd. Granting from Terminal grants only that terminal app.
+    - **Interactive use:** run `macos-calendar-events calendars --prompt` once from that terminal.
+    - **launchd consumers (koda):** grant once from the consumer's own launchd job. koda runs `macos-calendar-events calendars --prompt` once as a child of its own job, e.g. a one-shot setup command.
+    - **Standalone launchd use:** a documented one-shot recipe. A plist with `ProgramArguments` = the installed CLI's absolute path plus `calendars --prompt`, `RunAtLoad` and no `KeepAlive`; then `launchctl bootstrap gui/$UID <plist>`, click Allow, `launchctl bootout gui/$UID/<label>`. It grants the CLI's interpreter binary.
+    - **System Settings:** it can't add apps manually; it only toggles entries that already prompted.
+    - **Reset during development:** `tccutil reset Calendar <bundle-id>`, run by the user, never by the tool.
+  - interpreter caveats:
+    - A uv Python upgrade or reinstall changes the interpreter realpath, which loses access (exit 3) until you re-grant.
+    - Any script run under launchd by the granted interpreter inherits Calendar access.
+    - Recommend pinning the exact patch version at install (`uv tool install --python 3.12.<patch> …`) and re-running the grant after any interpreter change.
   - **"Integrating from another program" (primary):** absolute-path subprocess call with a timeout, the R18 stability rules and the "any failure = no hints" rule, the `schema` subcommand and a link to `docs/schema/`, with the instruction that consumers and coding agents use the `docs/schema/` copy at the tag matching their installed CLI (e.g. `https://raw.githubusercontent.com/vr000m/macos-calendar-events/v0.1.0/docs/schema/window-v1.schema.json`) or `macos-calendar-events schema`, epoch-seconds input (koda sends integer epoch seconds; RFC 3339 `Z`/`+00:00` is also accepted), the `_ts` output fields, the dedupe key `(external_id, occurrence_start)` when `external_id` is non-null (provisional per Phase 0), and the fact that `id` is opaque;
   - CLI examples; Python API example (secondary); exit codes (R11, including 1);
   - known limitations: hidden calendars, delegate calendars if applicable, the R13 cap, external-id caveats, floating times, non-IANA zone names;
@@ -494,7 +505,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 - The `v0.1.0` tag that the install command pins is created by the user on `main` after merge (user-run; pushing a tag is the user's call). Until then, README examples are validated with `uv tool install --force .` from the checkout.
 - **Manual (user-run, post-tag; after the PRs merge and `v0.1.0` is pushed):** for each name in `window-v1 calendars-v1`, `curl -fsSL https://raw.githubusercontent.com/vr000m/macos-calendar-events/v0.1.0/docs/schema/$name.schema.json | cmp - src/macos_calendar_events/schema/$name.schema.json`, which proves the `$id` URLs resolve and match the packaged schemas.
 - **Manual (user-run; never automated, because it writes to `~/.local/bin`):** `uv tool install --force . && ~/.local/bin/macos-calendar-events --version`.
-- **Manual (user-run):** after `uv tool install --force .`, run the installed `~/.local/bin/macos-calendar-events` from a user launchd agent by absolute path (no `--prompt`, no preflight). Record exit code and status in Findings.
+- **Manual (user-run):** after `uv tool install --force .`, run the README's one-shot launchd grant recipe (with `--prompt`) if the interpreter isn't granted yet. Then run the installed `~/.local/bin/macos-calendar-events` from a user launchd agent by absolute path (no `--prompt`, no preflight). Record exit code and status in Findings.
 - **Post-tag check (user-run):** once `v0.1.0` exists, run the README's pinned install command once and record the result.
 - A short consumer snippet: `CLI_PATH = os.environ.get("KODA_CALENDAR_CLI", os.path.expanduser("~/.local/bin/macos-calendar-events"))`; `subprocess.run([CLI_PATH, "window", "--start", str(int(t0.timestamp())), "--end", str(int(t1.timestamp())), "--pad-minutes", "15"], capture_output=True, timeout=10)`, with `FileNotFoundError`/`TimeoutExpired`/non-zero/`json.JSONDecodeError` all mapped to "no hints", then a `schema_version` check, dedupe on `(external_id, occurrence_start)` for non-null `external_id`, and reconcile in your own code.
 
@@ -723,9 +734,10 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 ## Risks & Open Questions
 
-- **Risk: no TCC prompt from some terminals or from launchd.** The responsible app may lack `NSCalendarsFullAccessUsageDescription`, or there may be no app at all, leaving the status stuck at denied. *Mitigation:* Phase 0 measures every launch path; the reopen criteria are in Phase 0's exit checklist; worst case, a follow-up plan ships a minimal helper `.app`.
-- **Risk: the completion handler never fires without a run loop.** *Mitigation:* Phase 0 decides the run-loop strategy, and `wait_for_access` guarantees a bounded wait.
-- **Risk: a store created before the grant returns empty results after it** (exit 0 with `[]` on first run). *Mitigation:* Phase 0 measures it; a fresh store is built after a successful grant.
+- **Risk: no TCC prompt from some terminals or from launchd.** *Phase 0: did not occur.* Prompts appeared from the terminal (Rex) and from a launchd job (attributed to `python3.12`). *Remaining mitigation:* worst case, a follow-up plan ships a minimal helper `.app`.
+- **Risk: interpreter-keyed grants.** Under launchd, the grant belongs to the job's executable, here the uv-managed `python3.12` realpath. A uv Python upgrade or reinstall changes that path, so access is lost (exit 3) until a re-grant. Conversely, every script that interpreter runs under launchd inherits Calendar access. *Mitigation:* the README documents both; it recommends pinning the exact Python patch at `uv tool install` time, re-granting after an interpreter change, and (optionally) a dedicated interpreter for the tool. koda treats exit 3 as "no hints" and surfaces a re-grant hint.
+- **Risk: the completion handler never fires without a run loop.** *Phase 0: did not occur* (background-thread callback, no pump). `wait_for_access` still guarantees a bounded wait.
+- **Risk: a store created before the grant returns empty results after it** (exit 0 with `[]` on first run). *Phase 0: did not occur* (the pre-grant store matched a fresh one). The D7 fresh store after a grant is kept as cheap insurance. Related: with `not_determined` and no prompt, EventKit silently returns 0 calendars and 0 events with no error, which is why the access gate (R9) must run before any read.
 - **Risk: `calendarItemExternalIdentifier` instability** (it can change for some sources after sync, and differ across accounts). *Mitigation:* `id` is opaque and per-document; the dedupe guidance `(external_id, occurrence_start)` is provisional until Phase 0.
 - **Risk: PyObjC/macOS version drift.** *Mitigation:* macOS 14 floor via feature detection, a tested PyObjC floor, CI on `macos-latest`, and a darwin-only test pinning EventKit constants.
 - **Risk: contract drift between repos.** *Mitigation:* R18 schemas with format checking, schema-model sync tests, goldens, `schema_version` checked by koda.
@@ -757,6 +769,11 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - Decision (grilled): pre-1970 input. Instants before `1970-01-01T00:00:00Z` are rejected in both input forms (negative epoch, earlier RFC 3339 string, or earlier `datetime`) with exit 2 or `InvalidQueryError`. Output `_ts` may still be negative, with no schema minimum. → R12, Phases 3/5.
 - Decision (grilled): schema `$id`. It is the tag-pinned raw URL of the published docs copy (`https://raw.githubusercontent.com/vr000m/macos-calendar-events/v0.1.0/docs/schema/{window,calendars}-v1.schema.json`). It won't resolve until the PRs merge and `v0.1.0` is tagged, which is expected. Phase 6 adds a post-tag user-run check that the URLs resolve and match the packaged schemas. → R18, Phase 6.
 - Decision (grilled): versioned copies. The README tells consumers and coding agents to use the `docs/schema/` copy at the tag matching their installed CLI (or `macos-calendar-events schema`). After release, koda may rely on the pinned tag URL. → R18, Phase 6 README.
+- Decision (Phase 0): grant context. TCC attributes access to the responsible process: the terminal app for terminal-launched processes, and the job's executable (the interpreter realpath) for launchd jobs and their children. A terminal grant doesn't carry over to launchd, and System Settings can't add apps manually. So the README's grant instructions say to grant once from the same context that will run the CLI; for launchd, that's a one-shot launchd recipe, or koda running `macos-calendar-events calendars --prompt` once from its own launchd job. This supersedes D4's "grant once … in Terminal" wording (D4's prompt-only-with-`--prompt` rule stands). → R9 remediation text, Phase 6 README and manual check.
+- Decision (Phase 0): interpreter-keyed grants. A uv Python upgrade loses access, and any script run by the granted interpreter under launchd inherits it. This is documented as a risk; the README recommends pinning the exact Python patch at install and re-granting after interpreter changes. → Risks, Phase 6 README.
+- Decision (Phase 0): run loop. The completion fired on a background thread without pumping, so the adapter uses the default `threading.Event.wait` waiter; the injectable seam stays for tests. → R9, Phase 4, Technical Considerations.
+- Decision (Phase 0): D7 kept as is. The pre-grant store matched a fresh store (16 calendars / 62 events), so a single store would also work, but the fresh-store-after-grant rule stays as cheap insurance (no contract change).
+- Decision (Phase 0): D1 reopen criteria checked, not triggered. A launchd-started CLI reached `full_access` via a prompt, and the callback fired. The CLI-subprocess architecture stands.
 
 ## Acceptance Criteria
 
@@ -779,7 +796,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 ## Progress
 
-- [ ] Phase 0: EventKit and TCC spike
+- [x] Phase 0: EventKit and TCC spike (2026-11-19; findings below, spike deleted in the follow-up commit)
 - [ ] Phase 1: Scaffold, tooling, CI
 - [ ] Phase 2: Domain types, JSON serialization and schemas
 - [ ] Phase 3: Pure core against a fake source
@@ -789,7 +806,75 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 ## Findings
 
-- (Phase 0 spike results go here: shapes and counts only, no calendar content.)
+### Phase 0: EventKit and TCC spike (run 2026-11-19 by the user; counts and shapes only)
+
+**Environment**
+- macOS 26.6.2, arm64; PyObjC 13.0; Python 3.12.7 (uv-managed; realpath `~/.local/share/uv/python/cpython-3.12.7-macos-aarch64-none/bin/python3.12`).
+- The user's terminal is Rex (`TERM_PROGRAM=rex`, bundle `Rex Server.app`). The run labelled `iterm` was also Rex, already granted, so it isn't a separate-app data point. VS Code wasn't run.
+- **Timing (R18 budget):**
+  - `import EventKit` ≈ 0.05 s; interpreter start to import done ≈ 0.09 s; `uv run --with … --import-only` total ≈ 0.44 s.
+  - Cold store creation ≈ 0 ms; cold store + ±15-min query ≈ 4–20 ms; ±7-day query ≈ 2–5 ms (warm the same).
+  - First launch of a freshly installed `uv tool` entry point: import ≈ 0.73 s, child total ≈ 1.6 s (bytecode compile on first run).
+  - The suggested 10 s consumer timeout is confirmed, with a wide margin.
+
+**Permissions and attribution**
+- **Terminal (Rex):** `not_determined` → prompt shown → granted → `full_access`. The callback arrived on a background thread via `threading.Event.wait` **without a run loop** in ≈ 3.0 s (including the click).
+- **Child of a terminal-started Python parent:** the responsible process is `Rex Server.app`; it inherited the Rex grant; exit 0; empty stderr.
+- **launchd-started parent → child Python (no terminal ancestor):** the responsible process is the launchd job's executable (`python3.12`; `responsible_is_self` true for the job's process). Rex's grant **did not carry over** (`not_determined`).
+  - Without `--prompt`, reads returned **0 calendars / 0 events silently**, with no exception and no stderr.
+  - With `--prompt`, a prompt appeared and was granted in ≈ 2.4 s, with the callback again without a run loop.
+- **launchd → `uv tool`-installed entry point (koda's shape):** already `full_access`. The tool venv's Python resolves to the same uv-managed interpreter realpath as the launchd job's executable, so the grant is keyed to the interpreter binary, not to the script or tool name. The child's responsible process was the launchd job's `python3.12`.
+- **System Settings → Privacy & Security → Calendars:** two entries, `python3.12` (Full Access) and `Rex Server` (Full Access). There's **no "+" button**, so manual add isn't possible; the only way to grant is the prompt.
+- **Framework stderr (R11):** 0 bytes on every path measured: import, status, `not_determined` reads, access request, all queries. The denied path wasn't exercised.
+- **Store lifetime:** the store created before the first-time grant returned the same counts as a fresh store (16 calendars, 62 events in ±7 days) in both the terminal and launchd grants.
+- **D1 reopen criteria: not triggered.** The launchd-started CLI reached `full_access` via a documented user step (a prompt from the launchd context), and the callback fires without pumping.
+- **Harness note:** the first launchd attempt exited 78 (EX_CONFIG) because the plist pointed at an ephemeral `uv run --with` interpreter (`~/.cache/uv/builds-v0/.tmp…`, deleted on exit). That was a test-harness bug, not a result; the spike was fixed to use a persistent venv before the recorded launchd runs.
+
+**Calendars and sources**
+- 16 calendars:
+  - calendar types: 14 CalDAV (1), 1 subscription (3), 1 birthday (4);
+  - source types: 14 CalDAV (2), 1 subscribed (4), 1 birthdays (5).
+- 20 store sources (18 CalDAV, 1 subscribed, 1 birthdays). No nil calendar title, id or source.
+- `delegateSources`: 15 (all CalDAV), all 15 already among the default store's sources.
+- Colors: 16/16 in Device RGB (model 1), and 16/16 converted to sRGB hex with the declared dependencies.
+
+**Shapes (212 events, now ±30 days; system zone IANA-like)**
+- **Nil counts:** `organizer` 173, `timeZone` 34 (exactly the all-day events). Zero nils for external id, title, `eventIdentifier`, `occurrenceDate`, `event.calendar`, `calendar.title`, `calendar.calendarIdentifier`, source title, `startDate`, `endDate`, participant `URL` and participant `name`.
+- **R3 skip candidates:** 0.
+- **`id` base key:** 212 distinct, 0 collisions.
+- **`eventIdentifier`:** 11 identifiers shared by 112 rows (recurring occurrences share it), which confirms that `eventIdentifier` alone isn't unique per row. No detached occurrences in the window.
+- **Recurrence:** recurring 127 and non-recurring 85, with `isDetached` false for all. 26 recurring series, each with one external id.
+- **Cross-calendar external id:** **not observed** (111 external ids, 0 in 2+ calendars). `(external_id, occurrence_start)` collisions: 0. The provisional dedupe guidance holds and stays a consumer rule.
+- **Time zones:**
+  - 174 IANA-like, 4 GMT-offset style (all 4 rejected by `zoneinfo`), 34 nil (all-day);
+  - 0 floating timed events.
+  - This confirms `time_zone` must stay a raw informational string.
+- **All-day (34):**
+  - every one has nil `timeZone`, local start `00:00:00` and local end `23:59:59` (inclusive);
+  - UTC start offsets 7 h (11) and 8 h (23), i.e. anchored to the system zone;
+  - durations 1 d (27), 2 d (1), 3 d (4), plus 1.0417 d (1) and 4.0417 d (1), each one hour longer from crossing the DST fall-back;
+  - local end − start dates: 0 (28), 1 (1), 2 (4), 3 (1).
+  - This matches `normalize_all_day`'s inclusive-end +1 s rule.
+- **Participants:**
+  - 55 attendees, all type 1 (person); roles 1/2/3 = 50/1/4; status 1/2/3/4 = 2/51/1/1;
+  - URL schemes: `mailto` 82, no scheme 12 (non-mailto → `email=None`, `url` kept); no odd mailto shapes (query, percent-encoding, `//`, uppercase scheme).
+- **Self attendee:** CalDAV events had exactly one `isCurrentUser` attendee in 39 cases and nil `attendees` in 156; subscribed (7) and birthdays (10) had nil `attendees`; never more than one. `organizer.isCurrentUser` was true 2 times.
+- **Organizer in attendees:** the organizer also appeared in `attendees` in 11 events (now noted in R3; no dedupe).
+- **Status and availability:** event status 0/1/3 = 42/169/1; availability −1/0/1 = 18/167/27 (availability isn't in the contract).
+
+**Predicate edges (`predicateForEventsWithStartDate:endDate:calendars:`)**
+- An event ending exactly at the window start was **included** by the narrow EventKit query (20/20), but excluded by the half-open overlap filter.
+- Starting exactly at the window end: excluded (0/20).
+- Zero-length at the window start: included (1/1); at the window end: excluded (1/1).
+- So EventKit's predicate is inclusive at the start edge. The widen-then-filter design (R13) is required, not just defensive; the widened query contained every case.
+
+**Four-year limit**
+- Range = now − 730 d.
+- The 1460-day query returned 4287 rows. The 1461-, 1462- and 1500-day queries returned the **same 4287 rows** (latest start at +1459.2 d), with no error. EventKit **silently truncates** longer spans, which confirms R13's raise-instead-of-truncate cap.
+- Four 365-day queries summed to 4292 rows (union 4288 distinct, so 4 boundary-spanning events were counted twice). **1 row appeared in the union but not in the 1460-day query.**
+  - Unexplained. It may be a row-identity artifact, or a sub-1460-day effective limit.
+  - It matters only for windows near the cap (koda uses minutes), so there's no contract change. It's flagged for the final `/review-plan`.
+- Query cost: about 0.22–0.28 s for 1460 days, 0.02–0.07 s per 365 days.
 
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
