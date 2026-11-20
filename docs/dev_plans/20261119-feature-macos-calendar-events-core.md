@@ -1188,6 +1188,19 @@ Each fix has a regression test that failed with the fix reverted (mutation check
 
 Left for a decision (not changed): the plan Status header; schema `$id` pinned to `v0.1.0`; a pre-grant store surviving a request that times out (D7 and Phase 4's "after denial, no new store is built"); the overlap filter seeing truncated whole-second instants (R18 truncates at the `Raw*` boundary, R1 asks for every overlapping event).
 
+### Review-gauntlet fixes (round 2, 2026-11-20; uncommitted fixer pass)
+
+Each fix has a table-driven regression test that failed with the fix reverted (mutation check):
+- Calendar ids: round 1 cleaned `RawCalendar.id`, so `calendarWithIdentifier_` got a changed id and a filtered query for such a calendar returned nothing. Contract now: identifiers (`RawCalendar.id`, `RawEvent.calendar_id`) cross the `Raw*` boundary unchanged and are the join and lookup keys; `_mapping` applies `unicode_text` only where an id becomes output or meets a caller selector. Two ids equal after cleaning are both selected by that id.
+- CLI stdout: one writer (`_emit`) for JSON, `--help` and `--version`. It writes to the raw stream (nothing left buffered for the exit-time flush), loops over short writes, and treats a write that accepts no bytes as a failure. This replaces round 1's `dup2` of fd 1 onto `/dev/null`, which changed the host process when `main()` ran in-process. `main(["--help"])` and `main(["--version"])` now return 0 instead of raising `SystemExit(0)`.
+- `window_to_json` parses its bounds with `_mapping.parse_instant` (lazy import; `_mapping` imports `models`), replacing round 1's copy that accepted negative epochs and non-UTC datetimes and leaked `OverflowError`.
+- `check_readonly.sh` imports check: `scripts/check_imports.py` parses each file with `ast` (comma lists, `;`, continuations, `__import__`/`import_module` with a literal); unparseable files fail. The denylist and allowlist checks are unchanged.
+- `check_privacy.sh`: paths stay NUL-delimited (temp file, `sort -z`, `read -d ''`) and content is scanned with `grep -a` under `LC_ALL=C`, so newline names and binary files are scanned.
+- `validate_json.py`: `RecursionError` from the decoder is "not JSON" (exit 2).
+- Schemas: `maxLength` 20 on `instant` and 7 on `color_hex`; Python's `$` accepted a trailing newline. Portable to every regex dialect; CLI output unchanged.
+- Live cap check compares multisets of full row keys (both identifiers, occurrence start, start, end); chunks merge by per-key maximum.
+- README: the integration example validates against the installed CLI's schema with `jsonschema` (any exception means no hints); Privacy says `notes` is `null`, not omitted.
+
 ### Next step
 
 Phase 0 is done and the plan was reviewed (marker above). Remaining: push the branch, merge PR #1, tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
