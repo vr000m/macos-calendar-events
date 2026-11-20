@@ -206,7 +206,7 @@ reflect the Mac's time zone at query time. A full example lives in
 |------|---------|
 | 0 | OK; JSON on stdout |
 | 1 | Internal error (one stderr line naming the exception class) |
-| 2 | Usage or argument error: bad time, `end <= start`, window over the cap, `--pad-minutes < 0` |
+| 2 | Usage or argument error: bad time, epoch seconds out of range, `end <= start`, end after 9999-12-30T23:59:59Z, window over the cap, `--pad-minutes < 0` or too large |
 | 3 | Calendar access not granted (see [Granting Calendar access](#granting-calendar-access)) |
 | 4 | EventKit unavailable: not macOS, macOS older than 14, or PyObjC missing |
 | 5 | A `--calendar` selector matched nothing |
@@ -231,8 +231,8 @@ print([c.title for c in mce.list_calendars(prompt=False)])
 
 `start`/`end` are integer epoch seconds or aware UTC datetimes. The functions raise
 `CalendarAccessError`, `CalendarNotFoundError`, `EventKitUnavailableError` or
-`InvalidQueryError` (a `ValueError`). `events_in_window` and `list_calendars` default to
-`prompt=True`.
+`InvalidQueryError` (a `ValueError`). `calendars` must be a list of selectors; a bare string
+raises `InvalidQueryError`. `events_in_window` and `list_calendars` default to `prompt=True`.
 
 ## Known limitations
 
@@ -240,7 +240,8 @@ print([c.title for c in mce.list_calendars(prompt=False)])
   that state. Use `--calendar` to restrict.
 - Exchange delegate calendars are unverified.
 - A window may be at most 3×365−2 days long (after padding); longer windows exit 2 instead
-  of being silently truncated by EventKit. Windows may be arbitrarily far in the past.
+  of being silently truncated by EventKit. Windows may be arbitrarily far in the past, but the end must not be after
+  9999-12-30T23:59:59Z; a later end exits 2.
 - `external_id` may be null, and one invite can appear once per calendar.
 - Floating (no time zone) and all-day events are placed using the Mac's current time zone.
 - `time_zone` is informational: an IANA name when available, otherwise EventKit's raw name.
