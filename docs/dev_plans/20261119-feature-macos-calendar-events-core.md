@@ -944,6 +944,18 @@ Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by tick
 - `CalendarAccessError`'s message is exactly the R9 remediation text; the status is on `.status`. `CalendarNotFoundError`'s message names only the unmatched selectors via `repr()`; available titles are on `.available_titles`.
 - Schemas use `$defs` with `$ref` for each open enum, so the enum-parity test checks `$defs/<enum>` and that each field references it. RFC 2606 example addresses appear as literals in test fixtures (allowed by R16).
 
+**Phase 3**
+- Deviation (sketch gap): `RawEvent` carries only `calendar_id`, but `CalendarRef` needs `title` and `source_title`. `_mapping.to_events` takes an extra keyword, `calendars: Mapping[str, RawCalendar] | None = None`, and `_api.query_events` passes every calendar from `source.calendars()`. A row whose calendar id isn't in the map gets `title=None`, `source_title=None`. `_raw.py` is unchanged.
+- Order inside `to_events`: map → R3 skip → overlap filter → `assign_ids` (on the rows in the response, in EventKit order) → sort. Ids are therefore unique within the response and stable across identical calls.
+- `parse_instant` truncates an API `datetime`'s microseconds to whole seconds, matching the CLI's truncation and the window echo.
+- `epoch_to_utc` floors (so `-0.5` → `1969-12-31T23:59:59Z`), the same direction `datetime` serialization truncates.
+- `rgb_to_hex` clamps to [0, 1] and rounds half up; a non-finite component gives `None`.
+- `normalize_all_day` adds +1 s and +1 day only when the local end is exactly 23:59:59; a local-midnight end is already exclusive and is kept. If an all-day row lacks local components, its dates are `None` (the adapter always captures them).
+- `_access.wait_for_access` ignores the waiter's boolean and always re-reads the status after waiting; the test checks the waiter is the only thing that blocks and gets `(event, timeout)`.
+- The extra wrappers `participant_role_from_int`, `participation_status_from_int` and `participant_type_from_int` sit alongside the three named in the plan.
+- The darwin-only EventKit constants test ran and passed on this Mac (constants only; no store, no TCC).
+- Modules were written just before their tests in this phase; commits put modules first, then each test file.
+
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
 This was an author-side pass over skein `review-plan`'s five lenses plus its contradiction pass, run inline by the author instead of in fresh-context agents. **It doesn't replace `/review-plan`. Run that before `/conduct`.** It doesn't write the review marker.
