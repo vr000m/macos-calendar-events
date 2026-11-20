@@ -5,9 +5,11 @@ granted; 4 EventKit unavailable; 5 calendar selector not found. On 1/3/4/5 the C
 writes exactly one stderr line; stdout is written once, only after the output is built.
 Every stdout write, ``--help`` and ``--version`` included, goes through ``_emit``: exit 0
 only when every byte was written, else exit 1. A write that fails partway (for example a
-full non-blocking pipe or a full disk) is undone when stdout is a regular file, which is cut
-back to its length before the write; a pipe cannot take bytes back and can keep a prefix.
-Stdout is valid only on exit 0.
+full non-blocking pipe or a full disk) can leave a prefix of the output. Best effort: when
+stdout is a regular file the CLI was extending (``> file``), the bytes it added beyond the
+file's original end are removed, but only if the file has not changed since; an append-mode
+(``>>``) or overwritten (``1<>``) file, or a pipe, may keep a prefix. Stdout is valid only on
+exit 0.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import errno
-import fcntl
 import io
 import os
 import stat
@@ -98,9 +99,9 @@ def _write_stdout(data: bytes) -> None:
     nothing buffered for the interpreter's exit-time flush to retry (no second error, and
     no process-wide state is changed). A write that accepts no bytes (``None`` from a full
     non-blocking pipe, or 0) raises instead of being mistaken for success. Bytes already
-    accepted stay written on a pipe, which cannot take them back, so a write that fails
-    partway can leave a prefix there. When stdout is a regular file the bytes this call wrote
-    are cut back off (see :func:`_undo_partial_write`), so a failed write leaves it as it was.
+    accepted stay written, so a write that fails partway can leave a prefix. The one undo is
+    best effort (see :func:`_undo_partial_write`): bytes this call added beyond a regular
+    file's original end are removed when nothing else has changed the file since.
 
     A text-only stdout with no ``buffer`` (an in-process ``redirect_stdout(io.StringIO())``)
     gets the same UTF-8 text, with short writes continued and 0 a failure; ``None`` there is
@@ -120,7 +121,7 @@ def _write_stdout(data: bytes) -> None:
         sys.stdout.flush()
         return
     out = getattr(buffer, "raw", buffer)
-    start = _file_position(out)
+    undo = _undo_point(out)
     view = memoryview(data)
     total = 0
     try:
@@ -132,41 +133,52 @@ def _write_stdout(data: bytes) -> None:
             total += written
         out.flush()
     except Exception:
-        if start is not None:
-            _undo_partial_write(start[0], start[1], total)
+        if undo is not None:
+            _undo_partial_write(*undo, total)
         raise
 
 
-def _file_position(out: Any) -> tuple[int, int] | None:
-    """``(fd, offset)`` where this call's bytes start, when stdout is a regular file.
+def _undo_point(out: Any) -> tuple[int, int, int] | None:
+    """``(fd, start, size_before)`` taken before writing, when a failed write can be undone.
 
-    ``None`` for a pipe, terminal, in-memory stream or anything else that cannot be rewound.
-    An append-mode descriptor writes at the end of the file, so its start is the file size.
+    Only for a regular file this call extends: not append mode (another writer may append at
+    any time) and not a write over existing bytes (``start < size_before``; they can't be put
+    back). ``None`` otherwise, and for a pipe, terminal or in-memory stream, or a platform
+    without ``fcntl`` (Windows), where the mode can't be read.
     """
+    try:
+        import fcntl
+    except ImportError:
+        return None
     try:
         fd = out.fileno()
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             return None
         if fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_APPEND:
-            return fd, info.st_size
-        return fd, os.lseek(fd, 0, os.SEEK_CUR)
+            return None
+        start = os.lseek(fd, 0, os.SEEK_CUR)
     except (AttributeError, OSError, ValueError):
         return None
+    if start < info.st_size:
+        return None
+    return fd, start, info.st_size
 
 
-def _undo_partial_write(fd: int, start: int, written: int) -> None:
-    """Cut the ``written`` bytes this process put at ``start`` back off a regular file.
+def _undo_partial_write(fd: int, start: int, size_before: int, written: int) -> None:
+    """Remove the ``written`` bytes this call put at ``start`` (>= ``size_before``).
 
-    Only when the file is exactly ``start + written`` long, so bytes another writer added or
-    a file that was longer to begin with are never touched. Best effort: an error here
-    leaves the prefix, as a pipe would, and the original write error is the one reported.
+    Invariant: only bytes beyond the original end of file go, and only when the file is
+    exactly ``start + written`` long, i.e. nothing else has grown it since; the file is cut to
+    ``size_before`` (no zero-filled gap is left when ``start`` was past the end) and the
+    offset goes back to ``start``. Best effort: a writer racing this check can still lose
+    bytes, and an error here leaves the prefix; the original write error is the one reported.
     """
     if not written:
         return
     try:
         if os.fstat(fd).st_size == start + written:
-            os.ftruncate(fd, start)
+            os.ftruncate(fd, size_before)
             os.lseek(fd, start, os.SEEK_SET)
     except OSError:
         pass
