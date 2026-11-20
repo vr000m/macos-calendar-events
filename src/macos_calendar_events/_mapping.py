@@ -109,6 +109,23 @@ def participant_type_from_int(value: int) -> ParticipantType:
     return PARTICIPANT_TYPE.get(value, ParticipantType.UNKNOWN)
 
 
+# --- text ----------------------------------------------------------------------------
+
+
+def unicode_text(text: str) -> str:
+    """``text`` with every unpaired UTF-16 surrogate replaced by U+FFFD.
+
+    An ``NSString`` may hold a lone surrogate, which PyObjC passes through as ``\\udXXX``;
+    such a ``str`` can't be UTF-8 encoded (JSON output, id hashing). A split but valid
+    pair is joined into its code point.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+    return text
+
+
 # --- mailto and color ----------------------------------------------------------------
 
 

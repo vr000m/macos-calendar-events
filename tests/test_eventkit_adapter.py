@@ -227,3 +227,92 @@ def test_local_components_for_all_day_event() -> None:
     ns = namespace(factory, local_components=real.local_components, make_date=real.make_date)
     [raw] = EventKitSource(ns).events(START, END, None)
     assert [raw.start_local, raw.end_local] == [tuple(e) for e in expected]
+
+
+@darwin
+def test_local_components_follow_a_time_zone_change_in_process() -> None:
+    import Foundation
+
+    from macos_calendar_events._eventkit import _load_namespace
+
+    zone = Foundation.NSTimeZone
+    original = zone.defaultTimeZone()
+    try:
+        zone.setDefaultTimeZone_(zone.timeZoneWithName_("America/Los_Angeles"))
+        ns = _load_namespace()  # built while Los Angeles is the default zone
+        midnight_tokyo = ns.make_date(1763564400.0)  # 2025-11-20T00:00:00+09:00
+        assert ns.local_components(midnight_tokyo) == (2025, 11, 19, 7, 0, 0)
+        zone.setDefaultTimeZone_(zone.timeZoneWithName_("Asia/Tokyo"))
+        assert ns.local_components(midnight_tokyo) == (2025, 11, 20, 0, 0, 0)
+    finally:
+        zone.setDefaultTimeZone_(original)
+
+
+# --- text crosses the Raw* boundary as valid Unicode (R18: UTF-8 output) -------------
+
+LONE_HIGH, LONE_LOW = "\ud83d", "\ude00"
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Planning", "Planning"),
+        ("café \U0001f600", "café \U0001f600"),  # valid astral character
+        (LONE_HIGH + "A", "�A"),  # unpaired high surrogate
+        ("A" + LONE_LOW, "A�"),  # unpaired low surrogate
+        (LONE_LOW + LONE_HIGH, "��"),  # reversed pair: both unpaired
+        (LONE_HIGH + LONE_LOW, "\U0001f600"),  # a split but valid pair is joined
+        ("", ""),
+    ],
+)
+def test_unicode_text(text: str, expected: str) -> None:
+    from macos_calendar_events._mapping import unicode_text
+
+    got = unicode_text(text)
+    assert got == expected
+    got.encode("utf-8")  # never raises
+
+
+def test_lone_surrogates_in_eventkit_text_still_serialize_as_utf8(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from macos_calendar_events import _api
+    from macos_calendar_events.cli import main
+    from macos_calendar_events.models import calendars_to_json, window_to_json
+
+    bad = LONE_HIGH + "A"
+    person = Obj(
+        name=bad,
+        URL=Obj(absoluteString="mailto:" + bad + "@example.com"),
+        participantRole=1,
+        participantStatus=2,
+        participantType=1,
+        isCurrentUser=False,
+    )
+    cal = calendar("cal-" + bad, title=bad, source=Obj(title=bad, sourceType=2))
+    row = event(
+        cal,
+        title=bad,
+        location=bad,
+        notes=bad,
+        calendarItemExternalIdentifier=bad,
+        eventIdentifier=bad,
+        timeZone=Obj(name=bad),
+        URL=Obj(absoluteString="https://example.com/" + bad),
+        organizer=person,
+        attendees=[person],
+    )
+    source, _ = _source(calendars=[cal], events=[row])
+    result = _api.query_events(
+        lambda: source, START, END, calendars=None, include_notes=True, prompt=False
+    )
+    [ev] = result.events
+    assert ev.title == "�A" and ev.calendar.id == "cal-�A"
+    window_to_json(result.events, window=(START, END)).encode("utf-8")
+    calendars_to_json(_api.query_calendars(lambda: source, prompt=False)).encode("utf-8")
+    for argv in (
+        ["window", "--start", "1763481600", "--end", "1763658000", "--include-notes"],
+        ["calendars"],
+    ):
+        assert main(argv, source=source) == 0
+        assert capsys.readouterr().err == ""

@@ -53,14 +53,15 @@ def _load_namespace() -> EventKitNamespace:
     def make_date(seconds: float) -> Any:
         return Foundation.NSDate.dateWithTimeIntervalSince1970_(seconds)
 
-    # Always Gregorian: ``currentCalendar`` follows the user's calendar preference, so a
-    # Buddhist, Japanese, Hebrew or Islamic setting would yield non-Gregorian Y/M/D. The
-    # time zone of a new calendar is the system default, as ``currentCalendar``'s was.
-    gregorian = Foundation.NSCalendar.calendarWithIdentifier_(
-        Foundation.NSCalendarIdentifierGregorian
-    )
-
     def local_components(ns_date: Any) -> LocalComponents:
+        # Always Gregorian: ``currentCalendar`` follows the user's calendar preference, so a
+        # Buddhist, Japanese, Hebrew or Islamic setting would yield non-Gregorian Y/M/D.
+        # Built per call, as ``currentCalendar`` was: a calendar fixes its time zone (the
+        # default zone) when it is created, and R3 places all-day dates in the zone at
+        # query time, so a cached calendar would go stale after a time zone change.
+        gregorian = Foundation.NSCalendar.calendarWithIdentifier_(
+            Foundation.NSCalendarIdentifierGregorian
+        )
         c = gregorian.components_fromDate_(units, ns_date)
         return (
             int(c.year()),
@@ -97,7 +98,8 @@ def _load_namespace() -> EventKitNamespace:
 
 
 def _text(value: Any) -> str | None:
-    return None if value is None else str(value)
+    # Every NSString crosses the Raw* boundary as valid Unicode (no lone surrogates).
+    return None if value is None else _mapping.unicode_text(str(value))
 
 
 def _epoch(ns_date: Any) -> float | None:
@@ -155,7 +157,7 @@ class EventKitSource:
     def _calendar(self, cal: Any) -> RawCalendar:
         source = cal.source()
         return RawCalendar(
-            id=str(cal.calendarIdentifier()),
+            id=_mapping.unicode_text(str(cal.calendarIdentifier())),
             title=_text(cal.title()),
             source_title=None if source is None else _text(source.title()),
             source_type=-1 if source is None else int(source.sourceType()),
