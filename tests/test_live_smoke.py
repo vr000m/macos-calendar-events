@@ -129,7 +129,11 @@ def _keys(events: list[Event]) -> set[tuple[str, str, datetime]]:
 
 
 def cap_difference(get_source: Callable[[], EventSource], start: datetime) -> int:
-    """|distinct keys (one query)| - |distinct keys (union of three chunks)|."""
+    """Distinct keys in exactly one of: one query, the union of three chunks (0 = same set).
+
+    A set difference, not a size difference: a row missing from the single query must not be
+    masked by a different extra row.
+    """
 
     def run(a: datetime, b: datetime) -> list[Event]:
         return guarded(
@@ -148,7 +152,7 @@ def cap_difference(get_source: Callable[[], EventSource], start: datetime) -> in
     for a, b in itertools.pairwise(bounds):
         union |= _keys(run(a, b))
     print(f"cap_single={len(single)} cap_union={len(union)} cap_symdiff={len(single ^ union)}")
-    return len(single) - len(union)
+    return len(single ^ union)
 
 
 # --- live ---------------------------------------------------------------------------
@@ -199,3 +203,42 @@ def test_smoke_counts_on_fake_are_clean() -> None:
     counts = smoke_counts(lambda: FakeSource(events=[raw_event()]), now)
     assert {name: counts[name] for name in VIOLATIONS} == dict.fromkeys(VIOLATIONS, 0)
     assert counts["events"] == 1 and counts["calendars"] == 1
+
+
+class _Scripted(FakeSource):
+    """Returns ``first`` for the single full-window query, ``chunks`` for each chunk query."""
+
+    def __init__(self, first: list[Any], chunks: list[Any]) -> None:
+        super().__init__()
+        self._first, self._chunks, self._calls = first, chunks, 0
+
+    def events(self, start: datetime, end: datetime, calendar_ids: Any) -> Any:
+        self._calls += 1
+        return self._first if self._calls == 1 else self._chunks
+
+
+def _cap_row(event_id: str) -> Any:
+    from tests.fakes import raw_event
+
+    # Inside every chunk of the cap window that starts at 2024-01-01.
+    return raw_event("2024-06-01T10:00:00Z", "2024-06-01T11:00:00Z", event_identifier=event_id)
+
+
+@pytest.mark.parametrize(
+    ("single", "chunks", "expected"),
+    [
+        (["a"], ["a"], 0),  # same rows
+        ([], [], 0),
+        (["a", "b"], ["a", "b"], 0),
+        (["a"], ["b"], 2),  # same size, different rows: must not pass
+        ([], ["a"], 1),  # a row missing from the single query (the targeted failure)
+        (["a"], [], 1),  # an extra row in the single query
+        (["a", "b"], ["a", "c"], 2),
+    ],
+)
+def test_cap_difference_compares_sets_not_sizes(
+    single: list[str], chunks: list[str], expected: int
+) -> None:
+    source = _Scripted([_cap_row(i) for i in single], [_cap_row(i) for i in chunks])
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    assert cap_difference(lambda: source, start) == expected
