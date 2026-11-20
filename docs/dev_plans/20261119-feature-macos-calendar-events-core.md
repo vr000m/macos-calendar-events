@@ -1186,7 +1186,7 @@ Each fix has a regression test that failed with the fix reverted (mutation check
 - README: the integration example checks the document is an object with a list `events`; Known limitations labels the window cap unverified at its full length (R13).
 - CI actions are pinned to commit SHAs resolved with `gh api` (`actions/checkout` v4 → `11d5960`, `astral-sh/setup-uv` v6 → `d0cc045`, an annotated tag dereferenced).
 
-Left for a decision (not changed): the plan Status header; schema `$id` pinned to `v0.1.0`; a pre-grant store surviving a request that times out (D7 and Phase 4's "after denial, no new store is built"); the overlap filter seeing truncated whole-second instants (R18 truncates at the `Raw*` boundary, R1 asks for every overlapping event).
+Decided with the user in `/grill` on 2026-11-20 (all four accepted as recommended, none changes text above the marker): (1) D7 stays as written, so a pre-grant store survives a `request_access` that times out or is denied; Phase 0 showed the pre-grant store matches a fresh one. (2) The overlap filter keeps running on whole-second truncated instants (R18 wins over R1 for sub-second bounds); listed under README Known limitations. (3) Schema `$id` stays pinned to the release tag; the `$id` version is bumped only in a release that changes schema content (CHANGELOG header rule). (4) The plan Status header and R6/R11/R12/R13 stay as signed off; README and CHANGELOG carry the current behaviour, and Status is set with `/dev-plan complete` after merge.
 
 ### Review-gauntlet fixes (round 2, 2026-11-20; uncommitted fixer pass)
 

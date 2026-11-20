@@ -2,6 +2,8 @@
 
 All notable changes to this project are documented here. Golden-file (`tests/golden/*.json`) changes always get a line.
 
+Release rule: the `$id` in the packaged and `docs/schema/` schemas names the release tag that first shipped that schema content. Change the `$id` version only in a release that changes schema content, and run the `curl | cmp` check from the dev plan against that tag.
+
 ## Unreleased
 ### Added
 - `macos-calendar-events` CLI: `window` (`--start`/`--end` as epoch seconds or RFC 3339 UTC, `--calendar`, `--pad-minutes`, `--include-notes`, `--prompt`), `calendars [--prompt]`, `schema {window-v1|calendars-v1}`, and `--version`. Exit codes 0–5 per the README contract.

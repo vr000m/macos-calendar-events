@@ -259,6 +259,12 @@ raises `InvalidQueryError`. `events_in_window` and `list_calendars` default to `
   live consistency check finds missing rows, a later release lowers it. Windows may be
   arbitrarily far in the past, but the end must not be after 9999-12-30T23:59:59Z; a later
   end exits 2.
+- Event times are truncated to whole seconds before the overlap check, so an event whose
+  bound has a fractional second can be missed by a window that it overlaps by under one
+  second. Calendar apps normally store whole seconds.
+- If a Calendar access request times out and the grant arrives later (for example from
+  System Settings), the process keeps the event store it created before the grant. Run
+  the command again; each CLI run is a new process.
 - `external_id` may be null, and one invite can appear once per calendar.
 - Floating (no time zone) and all-day events are placed using the Mac's current time zone.
 - `time_zone` is informational: an IANA name when available, otherwise EventKit's raw name.
