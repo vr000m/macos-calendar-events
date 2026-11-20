@@ -2,7 +2,7 @@
 
 import dataclasses
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -140,10 +140,49 @@ def test_window_to_json_accepts_the_bound_forms_events_in_window_accepts(
     assert window_to_json([TIMED, ALL_DAY], window=(start, end)) == TWO_EVENT_JSON
 
 
-@pytest.mark.parametrize("bad", [True, 1.5, "1763568000", None])
-def test_window_to_json_rejects_other_bound_types(bad: object) -> None:
-    with pytest.raises(TypeError):
-        window_to_json([], window=(bad, WINDOW[1]))  # type: ignore[arg-type]
+_PLUS5 = timezone(timedelta(hours=5))
+
+
+@pytest.mark.parametrize(
+    ("bound", "accepted"),
+    [
+        (0, True),
+        (1763568000, True),
+        (datetime(2025, 11, 19, 16, tzinfo=UTC), True),
+        (datetime(2025, 11, 19, 16, tzinfo=ZoneInfo("UTC")), True),
+        (datetime(2025, 11, 19, 16, 0, 0, 999999, tzinfo=UTC), True),  # truncated, as R18
+        (-5, False),  # negative epoch
+        (10**12, False),  # out of datetime range (was OverflowError)
+        (True, False),
+        (1.5, False),
+        ("1763568000", False),
+        (None, False),
+        (datetime(2025, 11, 19, 16), False),  # naive
+        (datetime(2025, 11, 19, 21, tzinfo=_PLUS5), False),  # aware but not UTC
+        (datetime(1969, 12, 31, 23, 59, 59, tzinfo=UTC), False),  # before 1970
+    ],
+)
+@pytest.mark.parametrize("position", [0, 1])
+def test_window_to_json_bounds_match_events_in_window(
+    bound: object, accepted: bool, position: int
+) -> None:
+    """Each bound is accepted or rejected exactly as ``events_in_window`` does (one parser)."""
+    from macos_calendar_events._mapping import parse_instant
+    from macos_calendar_events.errors import InvalidQueryError
+
+    window = [WINDOW[0], WINDOW[1]]
+    window[position] = bound  # type: ignore[call-overload]
+    if accepted:
+        doc = json.loads(window_to_json([], window=(window[0], window[1])))
+        echoed = parse_instant(bound)  # type: ignore[arg-type]
+        assert doc["window"]["start" if position == 0 else "end"] == echoed.strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+    else:
+        with pytest.raises(InvalidQueryError):
+            window_to_json([], window=(window[0], window[1]))
+        with pytest.raises(InvalidQueryError):
+            parse_instant(bound)  # type: ignore[arg-type]
 
 
 def test_participant_to_dict_hand_written() -> None:
