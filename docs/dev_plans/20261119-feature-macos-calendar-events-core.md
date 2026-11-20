@@ -1,6 +1,6 @@
 # Task: macos-calendar-events v0.1: read-only EventKit window query library and CLI
 
-**Status**: Not Started
+**Status**: Complete (PR #1 ready to merge; `v0.1.0` is tagged after merge)
 **Component**: core
 **Assigned to**: Varun Singh (vr000m)
 **Priority**: High
