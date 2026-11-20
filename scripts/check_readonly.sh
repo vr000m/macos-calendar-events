@@ -33,8 +33,17 @@ run_grep() { # tag description pattern [extra grep args...]
 deny='saveEvent|removeEvent|saveCalendar|removeCalendar|saveReminder|removeReminder|commit_?\(|requestWriteOnlyAccess|requestAccessToEntityType|\.reset\('
 run_grep denylist "EventKit write/reset API referenced" "$deny"
 
-imports='^[[:space:]]*(import|from)[[:space:]]+(EventKit|Foundation|AppKit|objc)([[:space:].]|$)'
-run_grep imports "PyObjC imported outside _eventkit.py" "$imports" --exclude='_eventkit.py'
+# PyObjC imports outside the adapter, found by parsing (scripts/check_imports.py), not by
+# line patterns: `import os, EventKit`, `x = 1; import objc`, continuations and
+# `__import__("EventKit")` all count. A file that can't be parsed fails ([grep-error]).
+python=python3
+if [ -x "$root/.venv/bin/python" ]; then python="$root/.venv/bin/python"; fi
+imports_out="$("$python" -I "$root/scripts/check_imports.py" "$src" "$adapter" 2>&1)"
+case "$?" in
+    0) ;;
+    1) echo "[imports] PyObjC imported outside _eventkit.py:" >&2; echo "$imports_out" >&2; fail=1 ;;
+    *) echo "[grep-error] the imports check could not scan src/ ($python):" >&2; echo "$imports_out" >&2; fail=1 ;;
+esac
 
 # Allowlist: PyObjC selector calls with arguments (identifiers ending in "_(") in the
 # adapter must equal scripts/eventkit_selectors.allow exactly. Dunder calls are not selectors.

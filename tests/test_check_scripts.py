@@ -44,7 +44,7 @@ def tree(tmp_path: Path) -> Tree:
     def make(files: dict[str, str] | None = None, *, allow: str = "", add: bool = True) -> Path:
         root = tmp_path / "repo"
         (root / "scripts").mkdir(parents=True)
-        for name in ("check_readonly.sh", "check_privacy.sh"):
+        for name in ("check_readonly.sh", "check_imports.py", "check_privacy.sh"):
             shutil.copy(SCRIPTS / name, root / "scripts" / name)
         (root / "scripts" / "eventkit_selectors.allow").write_text(allow)
         pkg = root / "src" / "macos_calendar_events"
@@ -122,14 +122,65 @@ def test_readonly_stale_allowlist_entry(tree: Tree) -> None:
     assert "[allowlist]" in proc.stderr
 
 
-@pytest.mark.parametrize(
-    "line", ["import EventKit", "from EventKit import EKEventStore", "import objc"]
-)
-def test_readonly_pyobjc_import_outside_adapter(tree: Tree, line: str) -> None:
-    root = tree({"src/macos_calendar_events/other.py": f"{line}\n"})
+PYOBJC_IMPORTS = [
+    "import EventKit",
+    "from EventKit import EKEventStore",
+    "import objc",
+    "import os, EventKit",  # comma-separated
+    "import os as o, AppKit as ak",
+    "import Foundation.NSDate",  # submodule
+    "x = 1; import objc",  # after a semicolon
+    "if True: import EventKit",  # compound statement on one line
+    "import os, \\\n    EventKit",  # backslash continuation
+    "def f() -> None:\n    import AppKit",  # nested, indented
+    "try:\n    import EventKit\nexcept ImportError:\n    pass",
+    "from objc import super as s",
+    "from Foundation.NSDate import x",
+    "__import__('EventKit')",
+    "import importlib\nimportlib.import_module('Foundation')",
+    "from importlib import import_module\nimport_module('AppKit.NSColor')",
+]
+NOT_PYOBJC_IMPORTS = [
+    "# import EventKit only in comments",
+    '"""Docs: _eventkit imports EventKit lazily."""',
+    "s = 'import EventKit'",
+    "import EventKitten",  # a different module that shares a prefix
+    "import objcx",
+    "import os, json",
+    "from . import _eventkit",  # relative: a local module
+    "from .objc import helper",
+    "__import__(name)",  # not a literal: out of scope for a static check
+]
+
+
+@pytest.mark.parametrize("code", PYOBJC_IMPORTS)
+def test_readonly_pyobjc_import_outside_adapter(tree: Tree, code: str) -> None:
+    root = tree({"src/macos_calendar_events/other.py": f"{code}\n"})
     proc = _run("check_readonly.sh", root)
     assert proc.returncode != 0
     assert "[imports]" in proc.stderr
+    assert "other.py:" in proc.stderr
+
+
+@pytest.mark.parametrize("code", NOT_PYOBJC_IMPORTS)
+def test_readonly_non_pyobjc_import_passes(tree: Tree, code: str) -> None:
+    root = tree({"src/macos_calendar_events/other.py": f"{code}\n"})
+    proc = _run("check_readonly.sh", root)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_readonly_only_the_adapter_path_is_exempt(tree: Tree) -> None:
+    root = tree({"src/macos_calendar_events/sub/_eventkit.py": "import EventKit\n"})
+    proc = _run("check_readonly.sh", root)
+    assert proc.returncode != 0
+    assert "[imports]" in proc.stderr
+
+
+def test_readonly_unparseable_file_is_an_error_not_a_pass(tree: Tree) -> None:
+    root = tree({"src/macos_calendar_events/other.py": "def broken(:\n"})
+    proc = _run("check_readonly.sh", root)
+    assert proc.returncode != 0
+    assert "[grep-error]" in proc.stderr
 
 
 def test_readonly_comment_mentioning_pyobjc_passes(tree: Tree) -> None:
@@ -253,6 +304,56 @@ def test_privacy_unreadable_file_is_an_error_not_a_pass(
     assert proc.returncode == expected, proc.stderr
     assert ("[privacy-error]" in proc.stderr) is unreadable
     assert secret not in proc.stderr
+
+
+FILE_NAMES = [
+    "plain.txt",
+    "with space.txt",
+    " leading-space.txt",
+    "trailing-space.txt ",
+    "tab\tname.txt",
+    "new\nline.txt",  # split into two paths by a line-based reader
+    "new\nline",
+    "back\\slash.txt",
+    "-dash.txt",
+    "ünïcode.txt",
+    "dir with\nnewline/inner.txt",
+]
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+@pytest.mark.parametrize("name", FILE_NAMES)
+def test_privacy_scans_every_file_whatever_its_name(tree: Tree, name: str, tracked: bool) -> None:
+    secret = _addr("someone", "corp." + "com")
+    root = tree({name: f"contact: {secret}\n"}, add=tracked)
+    proc = _run("check_privacy.sh", root)
+    assert proc.returncode == 1, proc.stderr
+    assert "[privacy]" in proc.stderr
+    assert len(proc.stderr.splitlines()) == 1  # the name is shown on one line
+    assert secret not in proc.stderr
+
+
+@pytest.mark.parametrize(
+    ("prefix", "kind"),
+    [
+        (b"", "text"),
+        (b"\x00", "nul_first"),  # grep -I would call this binary and skip it
+        (b"PK\x03\x04\x00\x00", "zip_like_header"),
+        (bytes(range(256)), "all_bytes"),
+        (b"\xff\xfe\xfd", "invalid_utf8"),
+    ],
+)
+@pytest.mark.parametrize("disallowed", [True, False])
+def test_privacy_scans_binary_content(
+    tree: Tree, prefix: bytes, kind: str, disallowed: bool
+) -> None:
+    domain = "corp." + "com" if disallowed else "example." + "com"
+    address = _addr("someone", domain)
+    root = tree()
+    (root / f"blob-{kind}.bin").write_bytes(prefix + b" " + address.encode() + b"\n")
+    proc = _run("check_privacy.sh", root)
+    assert proc.returncode == (1 if disallowed else 0), proc.stderr
+    assert address not in proc.stderr
 
 
 def test_privacy_untracked_not_ignored_file(tree: Tree) -> None:
