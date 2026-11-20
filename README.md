@@ -157,6 +157,8 @@ query takes about 0.3 s, and the first launch of a fresh install about 1.6 s).
 The example below validates each document against the schema of the installed CLI with
 [`jsonschema`](https://pypi.org/project/jsonschema/), so the events it returns have every
 field the schema promises; anything else, including any exception, is "no calendar hints".
+Without the `format-nongpl` extra (it installs `rfc3339-validator`), `jsonschema` skips
+`date-time` checks without any error, so an invalid `start` or `end` would pass.
 
 ```python
 import json
