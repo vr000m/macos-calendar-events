@@ -20,15 +20,19 @@ secondary.
 ## Install
 
 ```sh
-uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0
+uv tool install --python 3.12.7 git+https://github.com/vr000m/macos-calendar-events@v0.1.0
 macos-calendar-events --version
 ```
+
+Pin `--python` to an exact version (any 3.11+ works; 3.12.7 is the tested one). Without it, uv
+picks the newest Python it can find (for example 3.13), and the Calendar grant is keyed to
+that interpreter (see [Interpreter caveats](#interpreter-caveats)).
 
 The CLI lands in `~/.local/bin`. A launchd job's PATH does not include `~/.local/bin`, so
 programs should call the CLI by its absolute path, e.g.
 `/Users/<you>/.local/bin/macos-calendar-events`.
 
-To install from a checkout instead: `uv tool install --force .`
+To install from a checkout instead: `uv tool install --python 3.12.7 --force .`
 
 ## Granting Calendar access
 
@@ -84,20 +88,24 @@ prompts unless you pass `--prompt`; without it, a missing grant exits 3 immediat
 - **System Settings → Privacy & Security → Calendars** can't add apps. It only toggles
   entries that have already prompted.
 - **Reset during development:** `tccutil reset Calendar <bundle-id>` (you run this; the tool
-  never does).
+  never does). Without a bundle id, `tccutil reset Calendar` resets the Calendar grant of
+  **every** app, so you will have to grant your terminal and any jobs again.
 
 ### Interpreter caveats
 
-- The grant is keyed to the interpreter binary's real path. A uv Python upgrade or reinstall
-  changes that path (the CLI's interpreter under the standalone recipe, or the consumer's
-  interpreter under its own job), so expect access to be lost (exit 3) until you grant again.
-  This is expected behavior, not yet measured.
-- Pin the exact patch version when installing, and grant again after any interpreter
-  change:
+- Outside a terminal, the grant is keyed to the interpreter binary's real path, and System
+  Settings lists it by binary name (`python3.12`, `python3.13`, …). An unpinned
+  `uv tool install` may pick a different Python than you granted (for example 3.13 instead
+  of 3.12), and a uv Python upgrade or reinstall changes that path too. Either way, expect
+  exit 3 until you grant again.
+- Pin the exact version with `--python` when installing, and grant again after changing it:
 
   ```sh
-  uv tool install --python 3.12.<patch> git+https://github.com/vr000m/macos-calendar-events@v0.1.0
+  uv tool install --python 3.12.7 --force git+https://github.com/vr000m/macos-calendar-events@v0.1.0
   ```
+
+  To see which interpreter a tool install uses:
+  `readlink -f ~/.local/share/uv/tools/macos-calendar-events/bin/python`.
 
 - **cron** is unverified. Prefer launchd.
 - Any script run under launchd by a granted interpreter inherits its Calendar access.
