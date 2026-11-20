@@ -2,13 +2,17 @@
 
 Exit codes: 0 ok; 1 internal error; 2 usage/argument error; 3 calendar access not
 granted; 4 EventKit unavailable; 5 calendar selector not found. On 1/3/4/5 the CLI
-writes exactly one stderr line; stdout is written once, only on success.
+writes exactly one stderr line; stdout is written once, only on success. Every stdout
+write, ``--help`` and ``--version`` included, goes through ``_emit``: exit 0 only when
+every byte was written, else exit 1.
 """
 
 from __future__ import annotations
 
 import argparse
-import os
+import contextlib
+import errno
+import io
 import sys
 from collections.abc import Callable, Sequence
 from datetime import timedelta
@@ -81,19 +85,33 @@ def _stderr_line(text: str) -> None:
 
 
 def _write_stdout(data: bytes) -> None:
-    sys.stdout.buffer.write(data)
+    """Write every byte of ``data`` to stdout, or raise.
+
+    Writes go to the unbuffered raw stream when there is one, so a failed write leaves
+    nothing buffered for the interpreter's exit-time flush to retry (no second error, and
+    no process-wide state is changed). A write that accepts no bytes (``None`` from a full
+    non-blocking pipe, or 0) raises instead of being mistaken for success.
+    """
     sys.stdout.flush()
+    buffer = sys.stdout.buffer
+    out = getattr(buffer, "raw", buffer)
+    view = memoryview(data)
+    while view:
+        written = out.write(view)
+        if not written:
+            raise BlockingIOError(errno.EAGAIN, "stdout accepted no bytes")
+        view = view[written:]
+    out.flush()
 
 
-def _discard_stdout() -> None:
-    """Point fd 1 at /dev/null so the interpreter's exit-time flush of the bytes a failed
-    write left buffered can't raise a second error (e.g. a reader that closed the pipe)."""
+def _emit(data: bytes) -> int:
+    """The single stdout exit: EXIT_OK only when every byte was written (R11)."""
     try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
-    except (OSError, ValueError):  # no real fd (e.g. a test capture): nothing to protect
-        pass
+        _write_stdout(data)
+    except Exception as exc:  # e.g. BrokenPipeError: one line, exit 1
+        _stderr_line(f"internal error: {type(exc).__name__}")
+        return EXIT_INTERNAL
+    return EXIT_OK
 
 
 def _run(args: argparse.Namespace, get_source: Callable[[], EventSource]) -> bytes:
@@ -124,7 +142,16 @@ def _run(args: argparse.Namespace, get_source: Callable[[], EventSource]) -> byt
 
 def main(argv: Sequence[str] | None = None, *, source: EventSource | None = None) -> int:
     parser = _parser()
-    args = parser.parse_args(argv)  # argparse exits 2 on usage errors
+    printed = io.StringIO()
+    try:
+        # --help/--version text is captured and sent through _emit like any other output;
+        # argparse's own write would ignore errors or leave them to the exit-time flush.
+        with contextlib.redirect_stdout(printed):
+            args = parser.parse_args(argv)  # usage errors: stderr, SystemExit(2)
+    except SystemExit as exc:
+        if exc.code not in (0, None):
+            raise
+        return _emit(printed.getvalue().encode("utf-8"))
     if args.command == "window" and args.pad_minutes < 0:
         parser.error("--pad-minutes must be >= 0")
 
@@ -149,13 +176,7 @@ def main(argv: Sequence[str] | None = None, *, source: EventSource | None = None
     except Exception as exc:
         _stderr_line(f"internal error: {type(exc).__name__}")
         return EXIT_INTERNAL
-    try:
-        _write_stdout(output)
-    except Exception as exc:  # e.g. BrokenPipeError: the same one-line exit 1 (R11)
-        _discard_stdout()
-        _stderr_line(f"internal error: {type(exc).__name__}")
-        return EXIT_INTERNAL
-    return EXIT_OK
+    return _emit(output)
 
 
 if __name__ == "__main__":

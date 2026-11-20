@@ -1,5 +1,6 @@
 """CLI behavior via ``main([...], source=FakeSource(...))`` (R7, R11, R12, R18)."""
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -103,10 +104,17 @@ def test_calendars_outputs_json(run: Callable[..., Out]) -> None:
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as info:
-        main(["--version"])
-    assert info.value.code == 0
+    assert main(["--version"]) == 0
     assert capsys.readouterr().out == "macos-calendar-events 0.1.0 (schema_version 1)\n"
+
+
+@pytest.mark.parametrize("argv", [["--help"], ["window", "--help"], ["schema", "-h"]])
+def test_help_returns_0_with_text_on_stdout(
+    capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    assert main(argv) == 0
+    out = capsys.readouterr()
+    assert out.out.startswith("usage: macos-calendar-events") and out.err == ""
 
 
 # --- padding ------------------------------------------------------------------------
@@ -556,3 +564,164 @@ def test_closed_stdout_pipe_exits_1_with_one_line_subprocess() -> None:
         os.close(write_end)
     assert proc.returncode == 1
     assert proc.stderr.splitlines() == ["internal error: BrokenPipeError"]
+
+
+# --- the stdout writer: every byte or exit 1 (R11); no process-wide side effects -------
+
+
+class _RawStream:
+    """A raw binary stream whose ``write`` results are scripted (an int caps the count)."""
+
+    def __init__(self, script: list[Any]) -> None:
+        self.script, self.data = list(script), bytearray()
+
+    def write(self, view: memoryview) -> int | None:
+        step = self.script.pop(0) if self.script else len(view)
+        if isinstance(step, BaseException):
+            raise step
+        if step is None or step == 0:
+            return step
+        n = min(step, len(view))
+        self.data += bytes(view[:n])
+        return n
+
+    def flush(self) -> None:
+        pass
+
+
+class _BufferedWithRaw:
+    def __init__(self, raw: _RawStream) -> None:
+        self.raw = raw
+
+    def write(self, data: bytes) -> int:
+        raise AssertionError("must write to the raw stream, never the buffer")
+
+
+class _ScriptedStdout:
+    def __init__(self, script: list[Any]) -> None:
+        self.raw = _RawStream(script)
+        self.buffer = _BufferedWithRaw(self.raw)
+
+    def flush(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("script", "complete"),
+    [
+        ([], True),  # everything at once
+        ([7] * 2000, True),  # short writes are continued, not lost
+        ([1, 3, 5], True),
+        ([None], False),  # full non-blocking pipe: no bytes accepted
+        ([7, None], False),  # partial, then would block
+        ([0], False),
+        ([BrokenPipeError(32, "Broken pipe")], False),
+        ([7, OSError(28, "No space")], False),
+        ([BlockingIOError(11, "again")], False),
+    ],
+)
+@pytest.mark.parametrize("argv", [["schema", "window-v1"], ["--version"], ["--help"]])
+def test_stdout_writer_exit_0_only_when_every_byte_is_written(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    script: list[Any],
+    complete: bool,
+    argv: list[str],
+) -> None:
+    expected = _expected_stdout(argv)
+    stdout = _ScriptedStdout(script)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    code = main(argv, source=source())
+    err = capsys.readouterr().err
+    if complete:
+        assert code == 0 and err == ""
+        assert bytes(stdout.raw.data) == expected
+    else:
+        assert code == 1
+        assert len(err.splitlines()) == 1 and err.startswith("internal error: ")
+
+
+def _expected_stdout(argv: list[str]) -> bytes:
+    import io
+
+    from macos_calendar_events.cli import _parser
+
+    if argv[0] == "schema":
+        return (files("macos_calendar_events") / "schema" / "window-v1.schema.json").read_bytes()
+    text = io.StringIO()
+    with contextlib.redirect_stdout(text), contextlib.suppress(SystemExit):
+        _parser().parse_args(argv)
+    return text.getvalue().encode("utf-8")
+
+
+def test_in_process_write_failure_leaves_the_host_stdout_alone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main() is called in-process (tests, scripts): a failed write must not rewire any fd or
+    leave bytes buffered for a later flush to fail on."""
+    import io
+    import os
+    import stat
+
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    stream = io.TextIOWrapper(io.BufferedWriter(io.FileIO(write_end, "w", closefd=False)))
+    monkeypatch.setattr(sys, "stdout", stream)
+    try:
+        assert main(["schema", "window-v1"]) == 1
+        assert stat.S_ISFIFO(os.fstat(write_end).st_mode)  # still the pipe, not /dev/null
+        stream.flush()  # nothing left buffered: no second BrokenPipeError
+    finally:
+        os.close(write_end)
+    assert capsys.readouterr().err.splitlines() == ["internal error: BrokenPipeError"]
+
+
+def _full_nonblocking_pipe() -> tuple[int, int]:
+    import fcntl
+    import os
+
+    read_end, write_end = os.pipe()
+    flags = fcntl.fcntl(write_end, fcntl.F_GETFL)
+    fcntl.fcntl(write_end, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    with contextlib.suppress(BlockingIOError):
+        while True:
+            os.write(write_end, b"x" * 4096)
+    return read_end, write_end
+
+
+def _closed_pipe() -> tuple[int, int]:
+    import os
+
+    read_end, write_end = os.pipe()
+    os.close(read_end)
+    return -1, write_end
+
+
+@pytest.mark.parametrize("pipe", ["closed", "full_nonblocking"])
+@pytest.mark.parametrize("unbuffered", [False, True])
+@pytest.mark.parametrize(
+    "argv", [["schema", "window-v1"], ["--help"], ["--version"], ["window", "--help"]]
+)
+def test_failed_stdout_exits_1_with_one_line_subprocess(
+    pipe: str, unbuffered: bool, argv: list[str]
+) -> None:
+    import os
+
+    read_end, write_end = _closed_pipe() if pipe == "closed" else _full_nonblocking_pipe()
+    flags = ["-u"] if unbuffered else []
+    try:
+        proc = subprocess.run(
+            [sys.executable, *flags, "-m", "macos_calendar_events.cli", *argv],
+            stdout=write_end,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+    finally:
+        os.close(write_end)
+        if read_end >= 0:
+            os.close(read_end)
+    assert proc.returncode == 1, proc.stderr
+    assert len(proc.stderr.splitlines()) == 1, proc.stderr
+    assert proc.stderr.startswith("internal error: ")
