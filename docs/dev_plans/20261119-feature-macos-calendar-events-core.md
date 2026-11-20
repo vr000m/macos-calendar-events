@@ -235,17 +235,18 @@ sequenceDiagram
 
 ## Implementation Checklist
 
-Each phase ends in a green, checkable state, and the next phase doesn't start until it is. Every `/conduct`-run phase gate (Phases 1–6) ends with the **full CI command** (spelled out literally in each Test command so `/conduct` can run it), so a phase-boundary commit can't be CI-red:
+Each phase ends in a green, checkable state, and the next phase doesn't start until it is. Every `/conduct`-run phase gate (Phases 1–4, 5a, 5b and 6) ends with the **full CI command** (spelled out literally in each Test command so `/conduct` can run it), so a phase-boundary commit can't be CI-red:
 
 Full gate: `uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
 
-Phase-specific pytest paths run first as a fast check. **Live-command preflight** (applies to the Phase 4 live smoke and the Phase 5 `Validation cmd`; the Phase 5 reset step and the Phase 6 launchd step deliberately skip it): those commands run from the terminal app that holds the Calendar grant (recorded in Phase 0 Findings). It is preceded by `uv run python -c "import sys, macos_calendar_events as m; s = m.authorization_status(); print(s); sys.exit(s != 'full_access')"`, which fails fast without prompting (available from Phase 4).
+Phase-specific pytest paths run first as a fast check. **Live-command preflight** (applies to the Phase 4 live smoke and the Phase 5b `Validation cmd`; the Phase 5b reset step and the Phase 6 launchd steps deliberately skip it): those commands run from the terminal app that holds the Calendar grant (recorded in Phase 0 Findings). It is preceded by `uv run python -c "import sys, macos_calendar_events as m; s = m.authorization_status(); print(s); sys.exit(s != 'full_access')"`, which fails fast without prompting (available from Phase 4).
 
-### Phase 0: EventKit and TCC spike (human-run; throwaway; decides the design)
+### Spike 0: EventKit and TCC spike (human-run; throwaway; decided the design)
 
-**Impl files:** `scripts/spike_eventkit.py`
-**Test files:** (none: manual spike)
-**Test command:** `uv run --python 3.12 --with pyobjc-framework-EventKit python scripts/spike_eventkit.py --summary`
+**Status:** done 2026-11-19; results are in `## Findings`. This section is historical. The spike script was committed at `3f27a1f` and deleted in `7f12955`, so it is no longer in the tree. The heading avoids the `### Phase N:` form on purpose, because `/conduct` parses that form as a phase to run. "Phase 0" elsewhere in this plan means this spike.
+
+Former slots (historical, not for `/conduct`): impl file `scripts/spike_eventkit.py`; no test files; run with `uv run --python 3.12 --with pyobjc-framework-EventKit python scripts/spike_eventkit.py --summary`.
+
 **Goal:** Turn the riskiest assumptions into observed facts before freezing types. The spike prints **counts and shapes only**, never titles, names, emails, notes, or ids.
 
 - Record the interpreter path, Python version and PyObjC version. Time the bare interpreter + `import EventKit` separately from `uv run` overhead (R18 budget).
@@ -279,20 +280,21 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
   - every bullet above has a recorded result in `## Findings` (Phase 0);
   - measurements are recorded in `## Findings` below the marker. `## Decisions` and the contract above the marker are edited (via `/dev-plan update`) **only when a result forces a contract change**. Phase 0 runs **before** the final `/review-plan`: after Phase 0, one `/review-plan` runs, then `/conduct`;
   - the architecture-reopen criteria are checked explicitly. **Stop and re-plan the CLI-subprocess architecture only if** (a) the CLI launched under a launchd-started parent can't reach `full_access` by any documented user step (granting from Terminal, or adding the executable in Privacy settings, if Phase 0's System Settings check shows that's possible), or (b) the permission completion callback never fires even with the run loop pumped. Every other Phase 0 result updates Phases 2–4 via `/dev-plan update`, followed by a fresh `/review-plan`.
-  - `Phase 0` is ticked in `## Progress`;
+  - Spike 0 is recorded as done in `## Progress` (as a plain line, not a checkbox, so `/conduct` doesn't parse it as a phase);
   - the spike is deleted in a second human-run Phase 0 commit, after the findings commit, so Phase 1 starts from a tree that passes `ruff check .` and the privacy gate.
 - Commit the spike with its findings (so history keeps it), then delete it in a second Phase 0 commit.
 
 ### Phase 1: Scaffold, tooling, CI
 
-**Impl files:** `pyproject.toml, uv.lock, README.md, CHANGELOG.md, src/macos_calendar_events/__init__.py, src/macos_calendar_events/py.typed, src/macos_calendar_events/_eventkit.py, .github/workflows/ci.yml, scripts/check_readonly.sh, scripts/eventkit_selectors.allow, scripts/check_privacy.sh`
+**Impl files:** `pyproject.toml, uv.lock, .gitignore, README.md, CHANGELOG.md, src/macos_calendar_events/__init__.py, src/macos_calendar_events/py.typed, src/macos_calendar_events/_eventkit.py, .github/workflows/ci.yml, scripts/check_readonly.sh, scripts/eventkit_selectors.allow, scripts/check_privacy.sh`
 **Test files:** `tests/test_import.py, tests/test_check_scripts.py`
 **Test command:** `uv run pytest tests/test_import.py tests/test_check_scripts.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
 
 **Goal:** Every later phase lands on a working lint/type/test/guard harness. The package imports without PyObjC.
 
 - The spike was already deleted in Phase 0's second commit, so Phase 1 starts from a clean tree.
-- **Manual post-commit step (user-run; must pass before Phase 2):** `git push -u origin feature/core-events-api && gh run watch --exit-status`.
+- `.gitignore`: add `/.conduct/` and `/.gauntlet/` (skein run state). `check_privacy.sh` scans untracked, not-ignored files, so unignored state files would be scanned.
+- **Manual post-commit step (user-run; must pass before Phase 2):** `git push -u origin feature/core-events-api && gh run watch --exit-status`. Phases 2–5b end at a green local gate and are not pushed one by one; CI first sees them at the next push. Phase 6 ends with a mandatory push and `gh run watch --exit-status`, and R17's criterion applies to that head.
 - Run `uv lock --check` with both `/opt/homebrew/bin/uv` and `~/.local/bin/uv` by absolute path, and record the result in Findings.
 - `pyproject.toml`:
   - hatchling, src layout, package data `schema/*.json` included.
@@ -433,47 +435,59 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 - Live smoke (`@pytest.mark.live`, skipped unless `MACOS_CALENDAR_EVENTS_LIVE=1` **and** darwin), over now ± 7 days: compute violation **counts** (non-aware datetimes, `start > end`, non-overlapping rows, empty ids, duplicate ids, JSON or schema failures) and assert each equals 0; `len(list_calendars()) > 0`. Print only counts. The live calls are wrapped in `try/except Exception as exc`, which fails with `type(exc).__name__` only (`raise … from None`), so no message or traceback carrying calendar data reaches the output. Schema errors are counted via `iter_errors` and never formatted. Extra counts: rows skipped by `to_events` (R3), all-day rows with null dates, `end_date <= start_date`, and timed rows with non-null dates. A non-live test feeds the smoke helper a fake that raises with a sentinel string, and asserts the sentinel is absent from captured output.
 - `tests/test_public_api.py`: monkeypatch `default_source` to return a recording `FakeSource`; assert argument forwarding, the defaults `include_notes=False` and `prompt=True`, that `authorization_status()` and `request_access()` return `AccessStatus`, and the re-exported names.
 
-### Phase 5: CLI and contract tests
+### Phase 5a: CLI and golden generator
+
+> Phase 5 was split into 5a and 5b in review run 4. Older "Phase 5" references in Decisions mean both. `/conduct` hands back after every phase boundary in its default mode (one phase per `--resume`; do not pass `--autonomous` for this plan), so the hand-back after 5a is the review slot for the goldens.
 
 **Impl files:** `src/macos_calendar_events/cli.py, tests/golden_fixtures.py, scripts/validate_json.py, scripts/regen_goldens.py, CHANGELOG.md`
-**Test files:** `tests/test_cli.py, tests/test_cli_contract.py, tests/test_validate_json.py, tests/golden/window-v1.json, tests/golden/calendars-v1.json`
-**Test command:** `uv run pytest tests/test_cli.py tests/test_cli_contract.py tests/test_validate_json.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
-**Validation cmd:** `set -o pipefail; uv run python -c "import sys, macos_calendar_events as m; s = m.authorization_status(); print(s); sys.exit(s != 'full_access')" && uv run macos-calendar-events calendars | uv run python scripts/validate_json.py calendars-v1 && uv run macos-calendar-events window --start "$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)" --end "$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)" | uv run python scripts/validate_json.py window-v1`
-**Goal:** The CLI is a thin shell and the stable cross-repo contract: parse → `_api` → serialize → map exceptions to exit codes (R11). Its stdout always validates against the v1 schemas (R18). It has no logic of its own beyond padding and UTC input validation.
+**Test files:** `tests/test_cli.py, tests/test_validate_json.py`
+**Test command:** `uv run pytest tests/test_cli.py tests/test_validate_json.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
+**Goal:** The CLI is a thin shell: parse → `_api` → serialize → map exceptions to exit codes (R11). It has no logic of its own beyond padding and UTC input validation. The golden generator and fixtures exist, but the goldens are neither generated nor committed in this phase, so they get a hand review before anything depends on them (R18).
 
-- **Build order:** run this phase with `/conduct --pause-phase`, so the golden diff gets its hand review before the boundary commit.
-  1. `cli.py` and `tests/golden_fixtures.py`, which has one builder each, `build_window_fixture()` and `build_calendars_fixture()`, used by both the script and the contract test. The script loads the module by path via `importlib.util.spec_from_file_location`.
-  2. `scripts/regen_goldens.py`.
-  3. Generate the goldens.
-  4. Hand-review them and add a `CHANGELOG.md` line.
-  5. Contract tests.
-
+- `cli.py` and `tests/golden_fixtures.py`, which has one builder each, `build_window_fixture()` and `build_calendars_fixture()`, used by both the generator script and the Phase 5b contract test. The script loads the module by path via `importlib.util.spec_from_file_location`.
 - `main(argv: Sequence[str] | None = None, *, source: EventSource | None = None) -> int` calls `_api.query_events(get_source, …)` with `get_source = (lambda: source) if source is not None else default_source`. `source` is the test seam and isn't a CLI flag. The module ends with `if __name__ == "__main__": sys.exit(main())`.
 - A catch-all handler maps unexpected exceptions to exit 1 with a one-line class-only message. Exit 2 is mapped only from argparse and `InvalidQueryError`. Exit 5's line names only the unmatched selectors, via `repr()`. stdout is written once, as UTF-8 bytes to `sys.stdout.buffer`, after serialization succeeds.
-- `window`: `--start`, `--end` (non-negative integer epoch seconds, or RFC 3339 UTC ending `Z`/`+00:00`; R12), `--calendar` (repeatable), `--pad-minutes N` (int ≥ 0, widens both ends before cap validation), `--include-notes`, `--prompt`. Output: `window_to_json` with the padded window echoed. `calendars`: `calendars_to_json`. `schema <name>`: writes the packaged schema bytes. `--version`.
+- `window`: `--start`, `--end` (non-negative integer epoch seconds, or RFC 3339 UTC ending `Z`/`+00:00`; R12), `--calendar` (repeatable), `--pad-minutes N` (int ≥ 0). Order per R12: validate the raw `--start`/`--end`, then pad both ends, then `_api` validates the padded window (cap and 1970 floor). `--include-notes`, `--prompt`. Output: `window_to_json` with the padded window echoed. `calendars`: `calendars_to_json`. `schema <name>`: writes the packaged schema bytes. `--version`.
 - `scripts/validate_json.py <schema-name>`: loads the packaged schema, validates stdin with the format checker, prints only the JSON path and keyword on failure, and exits non-zero. `tests/test_validate_json.py` feeds an invalid document containing a sentinel string and asserts the sentinel is absent from output. It also covers empty stdin and non-JSON stdin (non-zero exit, nothing echoed, sentinel absent from stdout and stderr) and a pattern-valid but format-invalid instant (keyword `format`).
-- `scripts/regen_goldens.py` writes `tests/golden/*.json` from the `tests/golden_fixtures.py` builders (which include a non-ASCII title and a `--pad-minutes 15` window). Goldens therefore carry every `_ts` field, and the window golden is produced from epoch-seconds input. Workflow: run `uv run python scripts/regen_goldens.py`, hand-review the diff against Phase 2's hand-written expected values and the spec, add a `CHANGELOG.md` line, then commit (R18).
-- `tests/test_cli_contract.py` (R18):
-  - `main([...], source=FakeSource(fixed fixtures))` stdout validates against the schema and equals the golden file byte for byte;
-  - every error exit leaves stdout empty;
-  - real subprocesses `[sys.executable, "-m", "macos_calendar_events.cli", …]` and the installed `macos-calendar-events` script (found via the venv `bin/`): `--help` exits 0; an unparseable `--start` exits 2 with empty stdout; `--version` prints the version and schema_version.
+- `scripts/regen_goldens.py` writes `tests/golden/*.json` from the `tests/golden_fixtures.py` builders (which include a non-ASCII title, an organizer who also appears in `attendees`, a nil-attendees event, and a `--pad-minutes 15` window). Goldens therefore carry every `_ts` field, and the window golden is produced from epoch-seconds input. **This phase writes the script but does not run it.**
 - `tests/test_cli.py`, via `main([...], source=FakeSource(...))` + `capsys`:
   - stdout parses as JSON with the expected events;
-  - `--pad-minutes 15` includes an event 10 min before `--start`, and the echoed `window` equals start − 15 min / end + 15 min; `--pad-minutes -1` → exit 2; padding that pushes the window over the cap → exit 2;
+  - `--pad-minutes 15` includes an event 10 min before `--start`, and the echoed `window` equals start − 15 min / end + 15 min; `--pad-minutes -1` → exit 2; padding that pushes the window over the cap → exit 2; `--start 0 --pad-minutes 15` → exit 2 (padded start before 1970, R12), while `--start 0 --pad-minutes 0` → 0;
   - `--include-notes` emits notes, and its absence emits `null`;
   - two `--calendar` flags restrict output; an unknown `--calendar` → exit 5;
   - prompt wiring, with `FakeSource` at `not_determined`: without `--prompt`, both `window` and `calendars` exit 3 with **zero** recorded requests; with `--prompt`, exactly one request is recorded; `--no-prompt` is rejected by argparse (exit 2);
-  - each error class → its exit code, with one CLI-written stderr line for 1/3/4/5 (argparse exits use `pytest.raises(SystemExit)`);
+  - each error class → its exit code, with one CLI-written stderr line for 1/3/4/5 (argparse exits use `pytest.raises(SystemExit)`); the exit-3 line contains the R9 remediation text (`calendars --prompt`) and no calendar titles;
+  - **R11 check order (each case asserts the winning code):** an inverted window with a source whose `default_source` raises `EventKitUnavailableError` → 2 (2 before 4); `EventKitUnavailableError` with a bad selector → 4 (4 before 5); `FakeSource` at `not_determined`, no `--prompt`, and an unknown `--calendar` → 3, not 5 (3 before 5, since an ungranted read returns zero calendars);
   - `default_source` monkeypatched to raise `EventKitUnavailableError` → exit 4, one stderr line, empty stdout; a non-darwin subprocess running `python -m macos_calendar_events.cli calendars` → exit 4 (ubuntu CI); an inverted window on non-darwin → exit 2 (R11 order);
   - `FakeSource` raising `RuntimeError` with a sentinel message → exit 1, stderr exactly `internal error: RuntimeError`, sentinel absent;
-  - exit 5 with a newline inside a selector → exactly one stderr line;
-  - one test per input form, each with its expected exit code: epoch `1763568000` → 0; `…Z` → 0; `…+00:00` → 0; fractional `…T12:00:00.5Z` → 0 (truncated); naive → 2; `+05:30` → 2; date-only → 2; `-00:00` → 2; float epoch `1763568000.5` → 2; negative epoch `-1` → 2; pre-1970 `1969-12-31T23:59:59Z` → 2; boundary `0` and `1970-01-01T00:00:00Z` → 0 with byte-identical output. Also: `window --start 1763568000 --end 1763571600` and `window --start 2025-11-19T16:00:00Z --end 2025-11-19T17:00:00Z` produce **byte-identical** stdout;
+  - exit 5 with a newline inside a selector → exactly one stderr line, and it omits calendar titles;
+  - one test per input form, each with its expected exit code: epoch `1763568000` → 0; `…Z` → 0; `…+00:00` → 0; fractional `…T12:00:00.5Z` → 0 (truncated); naive → 2; `+05:30` → 2; date-only → 2; `-00:00` → 2; float epoch `1763568000.5` → 2; negative epoch `-1` → 2; pre-1970 `1969-12-31T23:59:59Z` → 2; boundary `0` and `1970-01-01T00:00:00Z` → 0 with byte-identical output. A string that matches the R12 regex but fails `fromisoformat` (for example month 13) → 2, never 1. Also: `window --start 1763568000 --end 1763571600` and `window --start 2025-11-19T16:00:00Z --end 2025-11-19T17:00:00Z` produce **byte-identical** stdout;
   - `schema window-v1` / `schema calendars-v1` stdout is byte-identical to the packaged files; `schema nope` → 2 with empty stdout;
   - `end <= start` → 2;
   - UTC input (R12): `Z` and `+00:00` are accepted; a naive value and `+05:30` each exit 2 with the one-line UTC message and empty stdout; output instants all end in `Z`;
   - an old absolute window (`--start 2025-01-06T17:00:00Z --end 2025-01-06T18:00:00Z`) and a 6-week window both exit 0 with the fixture events.
+- **Review slot (user-run, between 5a and 5b; `/conduct` hands back after 5a):**
+  1. `uv run python scripts/regen_goldens.py`.
+  2. Hand-review the diff of `tests/golden/*.json` against Phase 2's hand-written expected values and the spec.
+  3. Add a `CHANGELOG.md` line, then commit the goldens as a user commit.
+  4. Run `/conduct --resume`.
+
+### Phase 5b: Contract tests and live validation
+
+**Impl files:** none
+**Test files:** `tests/test_cli_contract.py`
+**Test command:** `uv run pytest tests/test_cli_contract.py -v && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest -m "not live" && bash scripts/check_readonly.sh && bash scripts/check_privacy.sh`
+**Validation cmd:** `set -o pipefail; uv run python -c "import sys, macos_calendar_events as m; s = m.authorization_status(); print(s); sys.exit(s != 'full_access')" && uv run macos-calendar-events calendars | uv run python scripts/validate_json.py calendars-v1 && uv run macos-calendar-events window --start "$(date -u -v-1d +%Y-%m-%dT%H:%M:%SZ)" --end "$(date -u -v+1d +%Y-%m-%dT%H:%M:%SZ)" | uv run python scripts/validate_json.py window-v1`
+**Goal:** The stable cross-repo contract holds: stdout of every command validates against the v1 schemas and matches the hand-reviewed goldens byte for byte (R18). Any fix a failing contract test needs lands in `cli.py` or the schemas through the fix loop.
+
+- `tests/test_cli_contract.py` (R18):
+  - `main([...], source=FakeSource(fixed fixtures))` stdout validates against the schema and equals the committed golden file byte for byte;
+  - every error exit leaves stdout empty;
+  - real subprocesses `[sys.executable, "-m", "macos_calendar_events.cli", …]` and the installed `macos-calendar-events` script (found via the venv `bin/`): `--help` exits 0; an unparseable `--start` exits 2 with empty stdout; `--version` prints the version and schema_version.
 - **Manual validation (user-run, last in this phase):**
-  - then `tccutil reset Calendar <terminal-bundle-id>`, followed by `uv run python -c "import macos_calendar_events as m; print(m.request_access())"`; record prompt, grant and deny behavior;
+  - the live preflight is skipped here, because this step resets the grant;
+  - `tccutil reset Calendar <terminal-bundle-id>`, followed by `uv run python -c "import macos_calendar_events as m; print(m.request_access())"`; record prompt, grant and deny behavior;
+  - **denied path (not measured in Phase 0):** answer Don't Allow once, then record the CLI exit code (expect 3), whether Apple frameworks or PyObjC write to stderr (bytes only), and whether enabling the entry in System Settings restores access (R9, R11);
   - re-grant before marking the phase done.
 
 ### Phase 6: Docs and release readiness (no publish)
@@ -513,7 +527,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 ## Technical Specifications
 
 ### Files to Modify
-- `.gitignore`: no change expected (already covers `.venv`, `.mypy_cache`, `dist/`, `/.review-plan`; `uv.lock` stays tracked).
+- `.gitignore`: add `/.conduct/` and `/.gauntlet/` in Phase 1 (it already covers `.venv`, `.mypy_cache`, `dist/`, `/.review-plan`, `/.spike/`; `uv.lock` stays tracked).
 
 ### New Files to Create
 - `pyproject.toml`, `uv.lock`, `README.md` (stub in Phase 1, full in Phase 6): packaging and tooling.
@@ -530,7 +544,7 @@ Phase-specific pytest paths run first as a fast check. **Live-command preflight*
 - `src/macos_calendar_events/py.typed`
 - `docs/schema/window-v1.schema.json`, `docs/schema/calendars-v1.schema.json`: published byte-identical copies of the packaged schemas (packaged copy is the source of truth); `scripts/sync_schemas.py` refreshes them.
 - `tests/fakes.py`, `tests/test_*.py`, `tests/golden/*.json`: fakes, tests, goldens (fictional data only).
-- `scripts/check_readonly.sh`, `scripts/eventkit_selectors.allow`, `scripts/check_privacy.sh`, `scripts/validate_json.py`, `scripts/regen_goldens.py`; `scripts/spike_eventkit.py` (Phase 0 only, deleted in Phase 1).
+- `scripts/check_readonly.sh`, `scripts/eventkit_selectors.allow`, `scripts/check_privacy.sh`, `scripts/validate_json.py`, `scripts/regen_goldens.py`; (the Phase 0 spike script `scripts/spike_eventkit.py` was deleted in `7f12955`; nothing to create).
 - `.github/workflows/ci.yml`, `CHANGELOG.md`.
 
 ### Type and Signature Sketch
@@ -684,16 +698,16 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 |------|---------------|---------------|----------|
 | `EventSource` protocol / `Raw*` records | `_eventkit.py` (P4), `tests/fakes.py` (P3) | `_api.py` (P3) | No ObjC objects; timestamps as raw epoch floats, plus local components for all-day events (normalized in `_mapping`); nil → `None`; enum and authorization fields are raw EventKit ints; `color_rgb` sRGB floats or `None`; `events()` queries exactly the given range; `calendar_ids=None` means all calendars, and a non-None list resolving to no calendars returns `[]` without querying |
 | Access wait | `_access.py` (P3) | `_eventkit.py` (P4) | Returns a raw status int within `timeout`, whether or not the completion fires; the waiter is injectable (run-loop seam) |
-| Access gate | `_api.py` (P3) | `__init__` (P4), `cli.py` (P5) | Raises `CalendarAccessError(status)` unless `full_access`; requests at most once per call, and only when `prompt=True`; timeout `ACCESS_TIMEOUT_S = 60.0` |
-| JSON schema v1 | `models.py` + `src/macos_calendar_events/schema/*.json` (P2) | CLI (P5), koda-pipecat (external) | Keys always present; RFC 3339 whole-second datetimes; UTF-8, `ensure_ascii=False`, sorted keys; additive-only within v1, open enums; `schema_version` bumps on any breaking change (R18) |
-| CLI subprocess | `cli.py` (P5) | koda-pipecat (external) | `--start`/`--end` as epoch seconds or RFC 3339 UTC; `schema` subcommand; invoked by absolute path (`uv tool install …@v0.1.0`; `KODA_CALENDAR_CLI`); args per R7; stdout validates against v1 schema; exit codes per R11; stdout empty on error; consumer applies timeout and treats any failure as "no hints" |
+| Access gate | `_api.py` (P3) | `__init__` (P4), `cli.py` (P5a) | Raises `CalendarAccessError(status)` unless `full_access`; requests at most once per call, and only when `prompt=True`; timeout `ACCESS_TIMEOUT_S = 60.0` |
+| JSON schema v1 | `models.py` + `src/macos_calendar_events/schema/*.json` (P2) | CLI (P5a), koda-pipecat (external) | Keys always present; RFC 3339 whole-second datetimes; UTF-8, `ensure_ascii=False`, sorted keys; additive-only within v1, open enums; `schema_version` bumps on any breaking change (R18) |
+| CLI subprocess | `cli.py` (P5a) | koda-pipecat (external) | `--start`/`--end` as epoch seconds or RFC 3339 UTC; `schema` subcommand; invoked by absolute path (`uv tool install …@v0.1.0`; `KODA_CALENDAR_CLI`); args per R7; stdout validates against v1 schema; exit codes per R11; stdout empty on error; consumer applies timeout and treats any failure as "no hints" |
 
 ## Testing Notes
 
 ### Test Approach
 - **Unit (CI + local):** Phases 1–5, through public or seam functions with `FakeSource`, injected requesters, or a stub store. Expected values come from the requirements, not from running the code. The single exception is the generated, hand-reviewed goldens (R18).
 - **Live (local, opt-in):** `MACOS_CALENDAR_EVENTS_LIVE=1 uv run pytest -m live`, after the live preflight. Integer-count assertions only.
-- **Manual:** the Phase 0 spike; the Phase 5 launchd and reset/prompt checks; the Phase 6 README walk-through.
+- **Manual:** the Phase 0 spike (done); the Phase 5b reset, prompt and denied-path checks; the Phase 6 launchd, different-executable and cron checks and README walk-through.
 
 ### Edge Cases to Cover (each is mapped to a named test in its phase)
 
@@ -716,22 +730,24 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 | TCC states and prompt outcomes, including timeout | Phase 3 access, Phase 4 adapter |
 | Non-macOS and no-PyObjC import | Phase 1 import, ubuntu CI |
 | macOS < 14 guard | Phase 4 platform guard |
-| Over-cap window and padding past the cap | Phases 3 and 5 |
-| Old absolute window and multi-week window | Phases 3 and 5 |
+| Over-cap window and padding past the cap | Phases 3 and 5a |
+| Old absolute window and multi-week window | Phases 3 and 5a |
 | ±1-day query widening and all-day events near edges | Phase 3 |
-| Non-UTC or naive input; input grammar forms | Phases 3 and 5 |
+| Non-UTC or naive input; input grammar forms | Phases 3 and 5a |
 | id collisions with nil identifiers | Phase 3 |
 | Null `source_title` ordering | Phase 3 |
 | mailto hfields and encoded commas | Phase 3 |
-| Exit-code precedence (2 before 4) | Phase 5 |
-| Epoch vs RFC 3339 input equivalence; negative/float epoch; `-00:00` | Phases 3 and 5 |
+| Exit-code precedence (2 before 4, 4 before 5, 3 before 5) | Phase 5a |
+| Epoch vs RFC 3339 input equivalence; negative/float epoch; `-00:00` | Phases 3 and 5a |
 | Skipped nil-start/end/calendar rows | Phases 3 and 4 |
-| `schema` subcommand and docs copies | Phases 2, 5 and 6 |
+| `schema` subcommand and docs copies | Phases 2, 5a, 5b and 6 |
 | Raising library during live smoke | Phase 4 |
-| Non-ASCII output | Phases 2 and 5 |
+| Organizer repeated in attendees; nil attendees, organizer or timeZone | Phases 3, 4 and 5a |
+| Non-IANA zone names (`GMT+0530`); scheme-less participant URLs | Phase 3 |
+| Non-ASCII output | Phases 2, 5a and 5b |
 | Sub-second timestamps | Phase 2 |
 | Zero events | Phase 3 empty |
-| CLI run as a subprocess of a launchd-started parent | Phase 0 spike, Phase 5 manual |
+| CLI as a child of a launchd-started parent | Phase 0 spike (same-executable shape); Phase 6 manual (CLI as the job, and as a child of a job with a different executable) |
 
 ## Risks & Open Questions
 
@@ -759,7 +775,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - Decision (grilled): D5. `id` is opaque and unique within a response. The documented dedupe key is `(external_id, occurrence_start)`, only when `external_id` is non-null, and it's provisional pending the Phase 0 cross-calendar check. → R3, Non-Goals, Phase 6, type sketch, Risks.
 - Decision (grilled): D6. The adapter always queries ±1 day beyond the already-padded caller window, and the Python overlap filter trims, because all-day and floating events are date-anchored and DST or zone shifts can move them up to a day relative to a UTC window. The cap (4×365 − 2 days on the padded window) limits window **length**, not age: windows may be arbitrarily far in the past (e.g. a crashed cron reprocessing an old session with absolute UTC times). Tests cover an old absolute window and a multi-week window. → R13, diagrams, Phases 3/4/5, overlap rule. *(Round 2: the single widening owner is `_api` via `_mapping.query_range`; the adapter queries exactly the range it receives.)*
 - Decision (grilled): D7. One cached source per process; lazy store; a fresh store after a request that returns full access; `reset` is never called. Phase 0 may relax this to a single store. → R10, Phases 1/4, Architecture Decisions.
-- Decision (grilled): D8. Goldens are generated by `scripts/regen_goldens.py`, hand-reviewed, with a CHANGELOG line on change. This is stated as the single exception; Phase 2's hand-written expected values remain the independent check. → R18, Phases 1/5, Testing Notes.
+- Decision (grilled): D8. Goldens are generated by `scripts/regen_goldens.py`, hand-reviewed, with a CHANGELOG line on change. This is stated as the single exception; Phase 2's hand-written expected values remain the independent check. → R18, Phases 1/5a/5b, Testing Notes.
 - Decision (grilled): D9. Install via `uv tool install git+https://github.com/vr000m/macos-calendar-events@v0.1.0`. koda reads the absolute path from config/env (e.g. `KODA_CALENDAR_CLI`, default `~/.local/bin/macos-calendar-events`), and `FileNotFoundError` → no hints. launchd's PATH lacks `~/.local/bin`. → R18, Phase 6, seams.
 - Decision (grilled): R2-4. Phase 0 (human-run spike) runs now, before the final review. Measurements go to `## Findings` below the marker; the contract and `## Decisions` are edited only when a result forces it; then one `/review-plan` runs before `/conduct`. → Phase 0 exit checklist.
 - Decision (grilled): R2-3. Events missing `start`, `end`, `calendar.id` (or `occurrence_start`, which falls back to `start`) are skipped, and skips are counted in Phase 0 and the live smoke. `calendar.title` is nullable now. → R2, R3, type sketch, Phases 0/3/4.
@@ -781,13 +797,13 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - **R1, R3–R6, R8:** the Phase 3 named tests in `tests/test_window_query.py`, `tests/test_calendar_selection.py` and `tests/test_mailto.py` pass, and so does `tests/test_public_api.py` (Phase 4).
 - **R2:** the Phase 3 calendars tests and `tests/test_public_api.py` pass, and the live smoke shows `list_calendars()` is non-empty.
 - **R7, R11 (exit codes 0–5, empty stdout on error, one stderr line for 1/3/4/5) and R12 (UTC-only input as epoch seconds or RFC 3339 `Z`/`+00:00` in the CLI and API; `Z` strings plus `_ts` epochs in output):** pass in `tests/test_cli.py` and `tests/test_cli_contract.py`, including real-subprocess cases.
-- **R9:** `tests/test_access.py` (gate outcomes and the grant/deny/timeout wait) `tests/test_eventkit_adapter.py` and `tests/test_public_api.py` pass. On the Mac, the Phase 5 manual reset → `request_access()` run is recorded in Findings.
+- **R9:** `tests/test_access.py` (gate outcomes and the grant/deny/timeout wait) `tests/test_eventkit_adapter.py` and `tests/test_public_api.py` pass. On the Mac, the Phase 5b manual reset → `request_access()` run, including the denied path, is recorded in Findings.
 - **R10 and R14:** `bash scripts/check_readonly.sh` passes, and `tests/test_check_scripts.py` proves it fails on seeded violations and on an unreadable path.
-- **R13:** the cap boundary, old-absolute-window, multi-week and ±1-day widening tests (Phase 3) and the CLI over-cap, padding, old-window and multi-week tests (Phase 5) pass.
+- **R13:** the cap boundary, old-absolute-window, multi-week and ±1-day widening tests (Phase 3) and the CLI over-cap, padding, old-window and multi-week tests (Phase 5a) pass.
 - **R14:** `tests/test_import.py` passes, and the ubuntu CI job is green.
 - **R16:** `bash scripts/check_privacy.sh` passes in CI, the sentinel test in `tests/test_validate_json.py` passes, and the live smoke prints counts only.
 - **R17:** CI is green on macOS (3.11, 3.13) and ubuntu (3.12) for the pushed branch.
-- **R18:** `tests/test_schemas.py`, `tests/test_schema_copies.py` and `tests/test_cli_contract.py` pass (including `schema` subcommand byte-equality and epoch/RFC 3339 input equivalence) (format checking, schema-model sync, goldens), and the Phase 5 validation command validates live CLI output against both packaged schemas on the Mac.
+- **R18:** `tests/test_schemas.py`, `tests/test_schema_copies.py` and `tests/test_cli_contract.py` pass (including `schema` subcommand byte-equality and epoch/RFC 3339 input equivalence) (format checking, schema-model sync, goldens), and the Phase 5b validation command validates live CLI output against both packaged schemas on the Mac.
 - **R19:** `tests/test_platform_guard.py` passes.
 - README commands are executed verbatim on the Mac, except `tccutil reset` and the pinned-tag install (which gets its own post-tag check).
 - **R15:** the Phase 6 validation command proves the built wheel runs `--version`, contains `py.typed` and both schemas, and its `METADATA` carries `License-Expression: BSD-2-Clause`, `Requires-Python: >=3.11` and the darwin-only PyObjC requirement.
@@ -797,17 +813,21 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 ## Progress
 
-- [x] Phase 0: EventKit and TCC spike (2026-11-19; findings below, spike deleted in the follow-up commit)
+- Spike 0 (EventKit and TCC): done 2026-11-19; findings below. This line is deliberately not a checkbox, so `/conduct` doesn't parse it as a phase.
+- Do not tick Phases 1–6 by hand during a `/conduct` run. The conductor tracks them, and manual ticks shift its phase index. Leave them unticked until the run completes.
 - [ ] Phase 1: Scaffold, tooling, CI
 - [ ] Phase 2: Domain types, JSON serialization and schemas
 - [ ] Phase 3: Pure core against a fake source
 - [ ] Phase 4: EventKit adapter, platform gate and public API wiring
-- [ ] Phase 5: CLI and contract tests
+- [ ] Phase 5a: CLI and golden generator
+- [ ] Phase 5b: Contract tests and live validation
 - [ ] Phase 6: Docs and release readiness
 
 ## Findings
 
-### Phase 0: EventKit and TCC spike (run 2026-11-19 by the user; counts and shapes only)
+### Spike 0: EventKit and TCC spike (run 2026-11-19 by the user; counts and shapes only)
+
+Source: the spike script is recoverable at commit `3f27a1f` (`git show 3f27a1f:scripts/spike_eventkit.py`); it was deleted in `7f12955`. Only the summarized counts below were kept; raw output was not saved.
 
 **Environment**
 - macOS 26.6.2, arm64; PyObjC 13.0; Python 3.12.7 (uv-managed; realpath `~/.local/share/uv/python/cpython-3.12.7-macos-aarch64-none/bin/python3.12`).
