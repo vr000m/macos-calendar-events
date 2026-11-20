@@ -201,7 +201,8 @@ def calendar_hints(start: int, end: int) -> list[dict] | None:
 # events overlapping a window, padded by 15 minutes on each side
 macos-calendar-events window --start 1763568000 --end 1763571600 --pad-minutes 15
 
-# RFC 3339 UTC input, restricted to two calendars (by id or case-insensitive title)
+# RFC 3339 UTC input, restricted to two calendars; each selector matches by id, and only a
+# selector that matches no id is tried as a case-insensitive title
 macos-calendar-events window --start 2025-11-19T16:00:00Z --end 2025-11-19T17:00:00Z \
   --calendar Work --calendar Home
 
@@ -237,8 +238,10 @@ reflect the Mac's time zone at query time. A full example lives in
 
 Use stdout only on exit 0. Every non-zero exit leaves stdout empty, except an exit 1 from a
 stdout write that fails partway (for example a full non-blocking pipe or a full disk). When
-stdout is a regular file (`> out.json`, `>> out.json`) the CLI cuts its own bytes back off,
-so the file is as it was; a pipe cannot take bytes back and can keep a truncated prefix.
+stdout is a regular file the CLI was extending (`> out.json`), it removes, best effort, the
+bytes it added beyond the file's original end, and only if nothing else has changed the file
+since. An append-mode (`>> out.json`) or overwritten (`1<> out.json`) file, or a pipe, may
+keep a truncated prefix.
 
 ## Python API
 
@@ -269,9 +272,9 @@ raises `InvalidQueryError`. `events_in_window` and `list_calendars` default to `
 - A window may be at most 3×365−2 days long (after padding); longer windows exit 2 instead
   of being silently truncated by EventKit. The cap keeps a year of margin below the span
   where a row went missing once, but it is not verified at its full length; if the opt-in
-  live consistency check finds missing rows, a later release lowers it. Windows may be
-  arbitrarily far in the past, but the end must not be after 9999-12-30T23:59:59Z; a later
-  end exits 2.
+  live consistency check finds missing rows, a later release lowers it. A window must
+  start at or after 1970-01-01T00:00:00Z, after padding, and end no later than
+  9999-12-30T23:59:59Z; anything outside exits 2.
 - Event times are truncated to whole seconds before the overlap check, so an event whose
   bound has a fractional second can be missed by a window that it overlaps by under one
   second. Calendar apps normally store whole seconds.
