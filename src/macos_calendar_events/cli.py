@@ -2,9 +2,11 @@
 
 Exit codes: 0 ok; 1 internal error; 2 usage/argument error; 3 calendar access not
 granted; 4 EventKit unavailable; 5 calendar selector not found. On 1/3/4/5 the CLI
-writes exactly one stderr line; stdout is written once, only on success. Every stdout
-write, ``--help`` and ``--version`` included, goes through ``_emit``: exit 0 only when
-every byte was written, else exit 1.
+writes exactly one stderr line; stdout is written once, only after the output is built.
+Every stdout write, ``--help`` and ``--version`` included, goes through ``_emit``: exit 0
+only when every byte was written, else exit 1. A write that fails partway (for example a
+full non-blocking pipe or a full disk) can leave a prefix on stdout: stdout is valid only on
+exit 0.
 """
 
 from __future__ import annotations
@@ -90,10 +92,18 @@ def _write_stdout(data: bytes) -> None:
     Writes go to the unbuffered raw stream when there is one, so a failed write leaves
     nothing buffered for the interpreter's exit-time flush to retry (no second error, and
     no process-wide state is changed). A write that accepts no bytes (``None`` from a full
-    non-blocking pipe, or 0) raises instead of being mistaken for success.
+    non-blocking pipe, or 0) raises instead of being mistaken for success. Bytes already
+    accepted stay written, so a write that fails partway leaves a prefix on stdout.
+
+    A text-only stdout with no ``buffer`` (an in-process ``redirect_stdout(io.StringIO())``)
+    gets the same UTF-8 text.
     """
     sys.stdout.flush()
-    buffer = sys.stdout.buffer
+    buffer = getattr(sys.stdout, "buffer", None)
+    if buffer is None:
+        sys.stdout.write(data.decode("utf-8"))
+        sys.stdout.flush()
+        return
     out = getattr(buffer, "raw", buffer)
     view = memoryview(data)
     while view:

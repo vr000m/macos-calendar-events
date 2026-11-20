@@ -654,6 +654,25 @@ def _expected_stdout(argv: list[str]) -> bytes:
     return text.getvalue().encode("utf-8")
 
 
+@pytest.mark.parametrize(
+    "argv", [["schema", "window-v1"], ["--version"], ["--help"], ["calendars"]]
+)
+def test_text_only_stdout_gets_the_same_text(
+    capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    """An in-process caller's ``redirect_stdout(io.StringIO())`` has no ``.buffer``."""
+    import io
+
+    with contextlib.redirect_stdout(io.StringIO()) as text:
+        code = main(argv, source=source())
+    assert (code, capsys.readouterr().err) == (0, "")
+    with contextlib.redirect_stdout(io.TextIOWrapper(io.BytesIO(), "utf-8")) as binary:
+        assert main(argv, source=source()) == 0
+        binary.flush()
+        expected = binary.buffer.getvalue()
+    assert text.getvalue().encode("utf-8") == expected
+
+
 def test_in_process_write_failure_leaves_the_host_stdout_alone(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
