@@ -112,7 +112,7 @@ def build_window_fixture() -> CliFixture:
             title="Canceled check-in",
             status=3,
         ),
-        # canceled, outside the padded window (ends after 17:15Z start): filtered by overlap
+        # canceled, starts 17:30Z, after the padded end (17:15Z): filtered by overlap
         raw_event(
             "2025-11-19T17:30:00Z",
             "2025-11-19T18:00:00Z",
