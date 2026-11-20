@@ -925,6 +925,18 @@ Source: the spike script is recoverable at commit `3f27a1f` (`git show 3f27a1f:s
   - It matters only for windows near the cap (koda uses minutes), so there's no contract change. It's flagged for the final `/review-plan`.
 - Query cost: about 0.22–0.28 s for 1460 days, 0.02–0.07 s per 365 days.
 
+### Implementation run (emulated `/conduct`, 2026-11-20, agent-run while the user was away)
+
+Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by ticking Progress. Commits are small, one logical unit each.
+
+**Phase 1**
+- `uv lock --check`: `/opt/homebrew/bin/uv` 0.13.9 → exit 0; `~/.local/bin/uv` 0.9.18 → exit 0 (both "Resolved 37 packages").
+- Local env: `python3` and uv's default interpreter on this Mac are Homebrew 3.15, so `.venv` was created with `uv venv --python 3.12.7` (the granted interpreter). Not a repo change; CI pins its own versions.
+- Deviation: ruff ≥ 0.17 formats Python code blocks inside Markdown, and `ruff format --check .` failed on this plan's type sketch (deliberately compact, one-line classes). `[tool.ruff] extend-exclude = ["*.md"]` keeps the plan untouched; ruff still lints and formats every `.py` file.
+- `check_readonly.sh` excludes dunder calls (`__init__(` etc.) from the selector-allowlist set, since they are not PyObjC selectors.
+- `check_privacy.sh` allows RFC 2606 names: `example.com/.org/.net` and the reserved TLDs `.test`, `.example`, `.invalid`, `.localhost`, each including subdomains, plus `*.noreply.github.com`.
+- Not done (user-run manual step): `git push -u origin feature/core-events-api && gh run watch --exit-status`. CI has therefore not run yet.
+
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
 This was an author-side pass over skein `review-plan`'s five lenses plus its contradiction pass, run inline by the author instead of in fresh-context agents. **It doesn't replace `/review-plan`. Run that before `/conduct`.** It doesn't write the review marker.
