@@ -843,6 +843,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 - Spike 0 (EventKit and TCC): done 2026-11-19; findings below. This line is deliberately not a checkbox, so `/conduct` doesn't parse it as a phase.
 - Do not tick Phases 1–6 by hand during a `/conduct` run. The conductor tracks them, and manual ticks shift its phase index. Leave them unticked until the run completes.
+- Status 2026-11-20: Phases 1–6 are implemented and committed on `feature/core-events-api` (PR #1), plus four `/code-review xhigh --fix` commits (see Findings, "Post-review fixes"). The boxes below stay unticked because the work was not driven by `/conduct`.
 - [ ] Phase 1: Scaffold, tooling, CI
 - [ ] Phase 2: Domain types, JSON serialization and schemas
 - [ ] Phase 3: Pure core against a fake source
@@ -992,7 +993,7 @@ Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by tick
 - The window golden gained 6 rows (Tokyo/Kolkata/Helsinki timed; JP/IN/FI all-day) plus 4 fixture rows that the widened query fetches but the overlap filter drops. Existing rows are byte-identical (the diff is insertions only); `calendars-v1.json` is unchanged. Committed in `8f31781` with a CHANGELOG line, for after-the-fact review.
   - Deviation: the golden window is fixed on 2025-11-19, so the Helsinki DST transitions are covered by unit tests only, not by golden rows. Each all-day golden row simulates a Mac in that zone (local components are per row); a real Mac reports one system zone for all rows.
 - Commit order kept every commit green: fixture rows, then goldens, then `tests/test_cli_contract.py` (which compares against the goldens byte for byte).
-- `tests/test_cli_contract.py`: 21 tests (schema + golden byte equality for both commands, empty stdout on exits 1/2/3/4/5 and argparse errors, `--help`/`--version`/unparseable `--start` through both `python -m` and the venv console script). Full non-live suite: 333 passed, 1 skipped (non-darwin), 2 deselected (live).
+- `tests/test_cli_contract.py`: 21 tests (schema + golden byte equality for both commands, empty stdout on exits 1/2/3/4/5 and argparse errors, `--help`/`--version`/unparseable `--start` through both `python -m` and the venv console script). Full non-live suite at that point: 333 passed, 1 skipped (non-darwin), 2 deselected (live). After the post-review fixes: 342 passed, 1 skipped, 2 deselected.
 - **Validation cmd (run 2026-11-20 ~11:05 PST):** run verbatim as a child of a one-shot launchd job whose executable is the granted uv 3.12.7 interpreter (from the agent shell the preflight is `not_determined`). Exit 0; preflight `full_access`; both CLI outputs validated; stderr 0 bytes. Counts only: 16 calendars, 12 events in now ± 1 d. The job was removed; nothing was written to the repo. No `--prompt`.
 - **Manual validation (user-run, 2026-11-20, recorded by the agent):** in Rex, after `tccutil reset Calendar` run **without a bundle id** (this resets the Calendar grant for every app, not just Rex), Don't Allow was answered once. The CLI exited 3 with 0 bytes on stdout and 270 bytes on stderr, which is exactly the R9 remediation line; no framework or PyObjC output appeared. Re-enabling Rex in System Settings → Privacy & Security → Calendars restored access, and Rex was re-granted. This confirms the R9/R11 assumptions that Phase 0 left unmeasured.
 
@@ -1161,9 +1162,19 @@ The review produced 62 findings: 3 Critical, 30 Important and 29 Minor, 9 of the
 
 R2-1 to R2-4, Q-a and Q-b were grilled with the user on 2026-11-19 and applied above the marker as `Decision (grilled): …`. Q-a was an override/extension: the CLI and API accept epoch seconds or RFC 3339 UTC, and the output carries `_ts` epoch fields. R2-2 added published copies under `docs/schema/`. The others were accepted as recommended.
 
+### Post-review fixes (`/code-review xhigh --fix`, 2026-11-20)
+
+Four commits after the review marker, each with a regression test that failed first:
+- `4fe1d57`: `local_components` uses the Gregorian calendar instead of `NSCalendar.currentCalendar()`. A Buddhist-calendar Mac serialised an all-day 2025-11-19 event as `2568-11-19` (verified with `-AppleLocale th_TH@calendar=buddhist`).
+- `6ada071`: `scripts/check_privacy.sh` sets `pipefail`, so a failing `git ls-files` reaches the documented exit-2 branch.
+- `040d6ab`: exit 2 instead of 1 for out-of-range input: an oversized `--pad-minutes`, an epoch string over CPython's 4300-digit limit, and a trailing-newline epoch (`fullmatch`). `_mapping.validate_window` gained `LATEST_END` (9999-12-31T23:59:59Z minus the 1-day query margin), so an end beyond it exits 2.
+- `563fe24`: a bare-string `calendars=` raises `InvalidQueryError`; `CalendarNotFoundError.__reduce__` makes it picklable.
+
+Contract text above the marker (R6, R11, R12, R13 and the `validate_window` sequence diagram) does not yet list these bounds. It was left alone because editing it invalidates the review marker; the README and CHANGELOG state them.
+
 ### Next step
 
-**The user runs Phase 0 (the human-run EventKit/TCC spike) now**, recording measurements in `## Findings` (Phase 0) above, then runs one final `/review-plan`. `/conduct` starts only after that review, once its marker is written. The contract changed again in this update (input forms, `_ts` output fields, `schema` subcommand, `docs/schema/`, skip rule, privacy scan set), so the earlier markers wouldn't hold anyway.
+Phase 0 is done and the plan was reviewed (marker above). Remaining: push the branch, merge PR #1, tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
 
 ## Issues & Solutions
 
