@@ -1,0 +1,2 @@
+# PyObjC selector calls with arguments used by src/macos_calendar_events/_eventkit.py.
+# Must match the code exactly (scripts/check_readonly.sh enforces it). One per line.
