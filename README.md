@@ -154,26 +154,34 @@ query takes about 0.3 s, and the first launch of a fresh install about 1.6 s).
   (provisional guidance); rows with a null `external_id` are never deduped.
 - Declined and canceled events are returned with their status; you decide what to drop.
 
+The example below validates each document against the schema of the installed CLI with
+[`jsonschema`](https://pypi.org/project/jsonschema/), so the events it returns have every
+field the schema promises; anything else, including any exception, is "no calendar hints".
+
 ```python
 import json
 import subprocess
+from typing import Any
+
+import jsonschema  # third-party: pip install jsonschema
 
 CLI = "/Users/<you>/.local/bin/macos-calendar-events"
 
+
+def _cli_json(*args: str) -> Any:
+    proc = subprocess.run([CLI, *args], capture_output=True, timeout=10, check=False)
+    if proc.returncode != 0:
+        raise RuntimeError(f"exit {proc.returncode}")
+    return json.loads(proc.stdout)
+
+
 def calendar_hints(start: int, end: int) -> list[dict] | None:
     try:
-        proc = subprocess.run(
-            [CLI, "window", "--start", str(start), "--end", str(end), "--pad-minutes", "15"],
-            capture_output=True, timeout=10, check=False,
-        )
-        if proc.returncode != 0:
-            return None
-        doc = json.loads(proc.stdout)
-        if not isinstance(doc, dict) or doc.get("schema_version") != 1:
-            return None
-        events = doc.get("events")
-        return events if isinstance(events, list) else None
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+        schema = _cli_json("schema", "window-v1")  # cache this if you call often
+        doc = _cli_json("window", "--start", str(start), "--end", str(end), "--pad-minutes", "15")
+        jsonschema.validate(doc, schema)  # also checks schema_version == 1 (const)
+        return doc["events"]
+    except Exception:  # any failure means no hints, never a crash
         return None
 ```
 
@@ -258,8 +266,8 @@ raises `InvalidQueryError`. `events_in_window` and `list_calendars` default to `
 ## Privacy
 
 The tool only reads. It sends nothing anywhere, writes no files, and prints calendar data
-only to stdout. Notes are omitted unless you pass `--include-notes`. Error messages carry no
-event or calendar content.
+only to stdout. Every event's `notes` is `null` (the key is always present) unless you pass
+`--include-notes`. Error messages carry no event or calendar content.
 
 ## License
 
