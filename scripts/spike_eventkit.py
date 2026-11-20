@@ -772,7 +772,16 @@ def write_plist(args: argparse.Namespace) -> int:
     ld = out_dir / "launchd"
     ld.mkdir(parents=True, exist_ok=True)
     label = f"local.mce-spike.{args.label}"
-    prog = [sys.executable, str(SCRIPT), "--as-parent", "--label", args.label, "--out-dir", str(out_dir),
+    py = Path(args.python) if args.python else out_dir / "venv" / "bin" / "python"
+    if "/builds-v0/" in str(py) or "/.tmp" in str(py):
+        print(f"refusing: {tilde(str(py))} is an ephemeral uv env that is deleted when `uv run` exits; "
+              "run --make-venv and use .spike/venv/bin/python")
+        return 2
+    if not py.is_file() or not os.access(py, os.X_OK):
+        print(f"refusing: interpreter {tilde(str(py))} does not exist; run --make-venv first")
+        return 2
+    py = py.absolute()  # keep the venv path (not its symlink target) so the venv's site-packages load
+    prog = [str(py), str(SCRIPT), "--as-parent", "--label", args.label, "--out-dir", str(out_dir),
             "--prompt-timeout", str(int(args.prompt_timeout)), "--wait", args.wait]
     if args.prompt:
         prog.append("--prompt")
@@ -782,16 +791,38 @@ def write_plist(args: argparse.Namespace) -> int:
         prog += ["--child-cmd", args.child_cmd]
     import plistlib  # noqa: PLC0415
 
-    plist = {"Label": label, "ProgramArguments": prog, "RunAtLoad": True, "KeepAlive": False,
+    # Run once at load; no KeepAlive, so a failure never respawns.
+    plist = {"Label": label, "ProgramArguments": prog, "RunAtLoad": True,
              "WorkingDirectory": str(SCRIPT.parent.parent),
              "StandardOutPath": str(ld / f"{args.label}.out.log"),
              "StandardErrorPath": str(ld / f"{args.label}.err.log")}
     path = ld / f"{label}.plist"
+    for log in (ld / f"{args.label}.out.log", ld / f"{args.label}.err.log"):
+        log.unlink(missing_ok=True)  # so a wait loop never matches a stale log
     path.write_bytes(plistlib.dumps(plist))
     uid = os.getuid()
     print(f"wrote {tilde(str(path))}")
     print(f"load:   launchctl bootstrap gui/{uid} {path}")
     print(f"unload: launchctl bootout gui/{uid}/{label}")
+    return 0
+
+
+def make_venv(args: argparse.Namespace) -> int:
+    venv = Path(args.out_dir).resolve() / "venv"
+    uv = shutil.which("uv")
+    if uv is None:
+        print("refusing: uv not found on PATH")
+        return 2
+    cmds = [[uv, "venv", "--python", "3.12", str(venv)],
+            [uv, "pip", "install", "--python", str(venv / "bin" / "python"), "pyobjc-framework-EventKit>=13"]]
+    if venv.exists():
+        cmds = cmds[1:]
+    for c in cmds:
+        r = subprocess.run(c)
+        if r.returncode != 0:
+            print(f"failed: {' '.join(c[1:3])} exit {r.returncode}")
+            return r.returncode
+    print(f"venv ready: {tilde(str(venv / 'bin' / 'python'))}")
     return 0
 
 
@@ -835,9 +866,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--as-parent", action="store_true")
     ap.add_argument("--child-cmd", default=None, help="absolute path of the child executable (uv tool case)")
     ap.add_argument("--write-plist", action="store_true")
+    ap.add_argument("--python", default=None, help="interpreter for the launchd plist (default .spike/venv/bin/python)")
+    ap.add_argument("--make-venv", action="store_true", help="create the persistent .spike/venv used by launchd runs")
     ap.add_argument("--write-tool-pkg", action="store_true")
     ap.add_argument("--import-only", action="store_true")
     args = ap.parse_args(argv)
+    if args.make_venv:
+        return make_venv(args)
     if args.write_plist:
         return write_plist(args)
     if args.write_tool_pkg:

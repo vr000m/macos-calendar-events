@@ -13,15 +13,37 @@ cd ~/Code/vr000m/macos-calendar-events
 SPIKE=(uv run --python 3.12 --with 'pyobjc-framework-EventKit>=13' python scripts/spike_eventkit.py)
 ```
 
+launchd runs need a **persistent** interpreter. `uv run --with` envs live under `~/.cache/uv/builds-v0/.tmp…` and are deleted when `uv run` exits, so make `.spike/venv` (gitignored) once:
+
+```sh
+"${SPIKE[@]}" --make-venv     # = uv venv --python 3.12 .spike/venv && uv pip install --python .spike/venv/bin/python 'pyobjc-framework-EventKit>=13'
+```
+
+Define this helper once in the same shell. It's used by steps 5 and 6:
+
+```sh
+# bounded wait: up to 180 s, then show the err log and launchd state (never hangs)
+spike_wait() {
+  local l=$1 i=0
+  while (( i < 180 )); do
+    if grep -q 'results written' ".spike/launchd/$l.out.log" 2>/dev/null; then cat ".spike/launchd/$l.out.log"; return 0; fi
+    sleep 5; (( i += 5 ))
+  done
+  echo "timed out after 180s waiting for $l"
+  cat ".spike/launchd/$l.err.log" 2>/dev/null
+  launchctl print "gui/$UID/local.mce-spike.$l" 2>/dev/null | grep -E 'state|last exit'
+  return 1
+}
+```
+
 ## 1. Timing (Terminal.app; no store, no prompt)
 
 ```sh
 time "${SPIKE[@]}" --import-only
-PY=$("${SPIKE[@]:0:6}" python -c 'import sys; print(sys.executable)')
-time "$PY" scripts/spike_eventkit.py --import-only
+time .spike/venv/bin/python scripts/spike_eventkit.py --import-only
 ```
 
-The first command includes `uv run` overhead. The second is the bare interpreter plus `import EventKit`.
+The first command includes `uv run` overhead. The second is the bare persistent-venv interpreter plus `import EventKit`.
 
 ## 2. Terminal.app, direct, with prompt
 
@@ -55,37 +77,36 @@ The parent never touches EventKit. It records the child's exit code (and the sig
 
 ## 5. Child of a launchd-started parent
 
-Each `--write-plist` call prints the exact `launchctl bootstrap` / `bootout` lines with your UID.
+`--write-plist` uses `.spike/venv/bin/python`, and refuses an ephemeral `builds-v0` interpreter. The job runs **once** at load (no `KeepAlive`), so a failure never respawns. Old logs are cleared each time the plist is written.
 
 ```sh
 # 5a: no prompt. Does Terminal's grant carry over? What does stderr show on the not_determined path?
 "${SPIKE[@]}" --write-plist --label launchd-noprompt --skip-four-year
 launchctl bootstrap gui/$UID .spike/launchd/local.mce-spike.launchd-noprompt.plist
-sleep 20; cat .spike/launchd/launchd-noprompt.out.log
+spike_wait launchd-noprompt
 launchctl bootout gui/$UID/local.mce-spike.launchd-noprompt
 
 # 5b: with prompt. Can a prompt appear at all? If one does, note the app name and click Allow.
 "${SPIKE[@]}" --write-plist --label launchd-prompt --prompt --skip-four-year
 launchctl bootstrap gui/$UID .spike/launchd/local.mce-spike.launchd-prompt.plist
-# wait until results appear (up to ~2.5 min if no prompt shows)
-until grep -q 'results written' .spike/launchd/launchd-prompt.out.log 2>/dev/null; do sleep 5; done; cat .spike/launchd/launchd-prompt.out.log
+spike_wait launchd-prompt
 launchctl bootout gui/$UID/local.mce-spike.launchd-prompt
 ```
 
 ## 6. launchd parent → `uv tool`-installed entry point (koda's real shape)
 
-This step writes to `~/.local/bin`; you uninstall it at the end.
+This step writes to `~/.local/bin`; you uninstall it in step 8.
 
 ```sh
 "${SPIKE[@]}" --write-tool-pkg
 uv tool install --python 3.12 .spike/toolpkg
 "${SPIKE[@]}" --write-plist --label launchd-tool --prompt --skip-four-year --child-cmd "$HOME/.local/bin/mce-spike-probe"
 launchctl bootstrap gui/$UID .spike/launchd/local.mce-spike.launchd-tool.plist
-until grep -q 'results written' .spike/launchd/launchd-tool.out.log 2>/dev/null; do sleep 5; done; cat .spike/launchd/launchd-tool.out.log
+spike_wait launchd-tool
 launchctl bootout gui/$UID/local.mce-spike.launchd-tool
 ```
 
-If the launchd children didn't reach `full_access`, go to step 7. Check whether you can add the binary there (the tool's Python, which the results name). If you can, add it and rerun 5a and 6 without `--prompt` (that is, rerun `--write-plist` without `--prompt`).
+If the launchd children didn't reach `full_access`, go to step 7. Check whether you can add the binary there (the tool's Python, which the results name). If you can, add it, then repeat 5a and 6 without `--prompt`.
 
 ## 7. System Settings (manual observation)
 
