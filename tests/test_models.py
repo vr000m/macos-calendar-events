@@ -3,6 +3,7 @@
 import dataclasses
 import json
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -203,3 +204,32 @@ def test_frozen_mutation_raises() -> None:
 
 def test_collections_are_tuples() -> None:
     assert isinstance(TIMED.attendees, tuple)
+
+
+@pytest.mark.parametrize(
+    ("zone", "local", "text", "epoch"),
+    [
+        # Expected values cross-checked with TZ=<zone> /bin/date, not project code.
+        ("Asia/Tokyo", (2025, 11, 20, 7, 30), "2025-11-19T22:30:00Z", 1763591400),
+        ("Asia/Kolkata", (2025, 11, 20, 9, 15), "2025-11-20T03:45:00Z", 1763610300),
+        ("Europe/Helsinki", (2026, 3, 29, 2, 30), "2026-03-29T00:30:00Z", 1774744200),
+        ("Europe/Helsinki", (2026, 3, 29, 4, 30), "2026-03-29T01:30:00Z", 1774747800),
+        ("Europe/Helsinki", (2026, 10, 25, 0, 0), "2026-10-24T21:00:00Z", 1792875600),
+    ],
+)
+def test_zone_aware_datetime_serializes_as_utc(
+    zone: str, local: tuple[int, int, int, int, int], text: str, epoch: int
+) -> None:
+    start = datetime(*local, tzinfo=ZoneInfo(zone))
+    out = dataclasses.replace(TIMED, start=start, occurrence_start=start).to_dict()
+    assert (out["start"], out["start_ts"]) == (text, epoch)
+    assert (out["occurrence_start"], out["occurrence_start_ts"]) == (text, epoch)
+
+
+def test_helsinki_ambiguous_fall_back_hour_uses_fold() -> None:
+    first = datetime(2026, 10, 25, 3, 30, tzinfo=ZoneInfo("Europe/Helsinki"))  # EEST
+    second = first.replace(fold=1)  # EET, one hour later
+    a = dataclasses.replace(TIMED, start=first).to_dict()
+    b = dataclasses.replace(TIMED, start=second).to_dict()
+    assert (a["start"], a["start_ts"]) == ("2026-10-25T00:30:00Z", 1792888200)
+    assert (b["start"], b["start_ts"]) == ("2026-10-25T01:30:00Z", 1792891800)
