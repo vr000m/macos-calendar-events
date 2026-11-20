@@ -1169,11 +1169,11 @@ Four commits after the review marker, each with a regression test that failed fi
 - `6ada071`: `scripts/check_privacy.sh` sets `pipefail`, so a failing `git ls-files` reaches the documented exit-2 branch.
 - `040d6ab`: exit 2 instead of 1 for out-of-range input: an oversized `--pad-minutes`, an epoch string over CPython's 4300-digit limit, and a trailing-newline epoch (`fullmatch`). `_mapping.validate_window` gained `LATEST_END` (9999-12-31T23:59:59Z minus the 1-day query margin), so an end beyond it exits 2.
 - `563fe24`: a bare-string `calendars=` raises `InvalidQueryError`; `CalendarNotFoundError.__reduce__` makes it picklable.
-- Follow-up `86fa26d` (test only): RFC 3339 text with a trailing newline is rejected by the grammar check itself (`fullmatch`). Before the fix, `fromisoformat` already rejected it, so this guards the regex path. Non-live suite: 346 passed, 1 skipped, 2 deselected.
+- Follow-up `86fa26d` (test only): RFC 3339 text with a trailing newline is rejected by the grammar check itself (`fullmatch`). Before the fix, `fromisoformat` already rejected it, so this guards the regex path. Non-live suite: 346 passed, 1 skipped, 2 deselected. After review-gauntlet rounds 1-6: 866 passed, 1 skipped, 2 deselected.
 
 Contract text above the marker (R6, R11, R12, R13 and the `validate_window` sequence diagram) does not yet list these bounds. It was left alone because editing it invalidates the review marker; the README and CHANGELOG state them.
 
-### Review-gauntlet fixes (round 1, 2026-11-20; uncommitted fixer pass)
+### Review-gauntlet fixes (round 1, 2026-11-20; committed)
 
 Each fix has a regression test that failed with the fix reverted (mutation check):
 - CLI parsers set `allow_abbrev=False`, so an abbreviation such as `calendars --pro` or `window … --i` exits 2 instead of prompting or including notes (`test_abbreviated_options_are_rejected`, every unambiguous prefix of every option).
@@ -1188,7 +1188,7 @@ Each fix has a regression test that failed with the fix reverted (mutation check
 
 Decided with the user in `/grill` on 2026-11-20 (all four accepted as recommended, none changes text above the marker): (1) D7 stays as written, so a pre-grant store survives a `request_access` that times out or is denied; Phase 0 showed the pre-grant store matches a fresh one. (2) The overlap filter keeps running on whole-second truncated instants (R18 wins over R1 for sub-second bounds); listed under README Known limitations. (3) Schema `$id` stays pinned to the release tag; the `$id` version is bumped only in a release that changes schema content (CHANGELOG header rule). (4) The plan Status header and R6/R11/R12/R13 stay as signed off; README and CHANGELOG carry the current behaviour, and Status is set with `/dev-plan complete` after merge.
 
-### Review-gauntlet fixes (round 2, 2026-11-20; uncommitted fixer pass)
+### Review-gauntlet fixes (round 2, 2026-11-20; committed)
 
 Each fix has a table-driven regression test that failed with the fix reverted (mutation check):
 - Calendar ids: round 1 cleaned `RawCalendar.id`, so `calendarWithIdentifier_` got a changed id and a filtered query for such a calendar returned nothing. Contract now: identifiers (`RawCalendar.id`, `RawEvent.calendar_id`) cross the `Raw*` boundary unchanged and are the join and lookup keys; `_mapping` applies `unicode_text` only where an id becomes output or meets a caller selector. Two ids equal after cleaning are both selected by that id.
@@ -1201,7 +1201,7 @@ Each fix has a table-driven regression test that failed with the fix reverted (m
 - Live cap check compares multisets of full row keys (both identifiers, occurrence start, start, end); chunks merge by per-key maximum.
 - README: the integration example validates against the installed CLI's schema with `jsonschema` (any exception means no hints); Privacy says `notes` is `null`, not omitted.
 
-### Review-gauntlet fixes (round 3, 2026-11-20; uncommitted fixer pass)
+### Review-gauntlet fixes (round 3, 2026-11-20; committed)
 
 Each fix has a table-driven regression test that failed with the fix reverted (mutation check):
 - R6 regression from round 2: `select_calendars` compared selectors only with the cleaned output id, so the exact raw `calendarIdentifier` of a calendar holding a lone surrogate no longer matched, and fell through to title matching. A selector now matches by id when it equals the raw id **or** the output id (the two differ only for a lone surrogate).
@@ -1212,7 +1212,7 @@ Each fix has a table-driven regression test that failed with the fix reverted (m
 - `scripts/check_imports.py` bans every top-level module the PyObjC dependencies install (adds `Cocoa`, `CoreFoundation`, `PyObjCTools`, `PyObjCTest`); `Cocoa` re-exports Foundation and AppKit.
 - `scripts/check_privacy.sh` passes `./$path` to grep: a file named `-` made grep read stdin (the rest of the NUL listing), so it and every later path went unscanned.
 
-### Review-gauntlet fixes (round 4, 2026-11-20; uncommitted fixer pass)
+### Review-gauntlet fixes (round 4, 2026-11-20; committed)
 
 Each fix has a table-driven regression test that failed with the fix reverted (mutation check):
 - R6 regression from round 3: matching the raw id **or** the output id in one pass let an exact raw id also select another calendar whose cleaned id equals it (`cal-\ufffd` vs `cal-\ud83d`). Now a selector equal to a raw id selects that calendar only; otherwise every calendar whose output id equals it; otherwise titles.
@@ -1221,7 +1221,7 @@ Each fix has a table-driven regression test that failed with the fix reverted (m
 - README integration example checks `schema_version == 1` (not `True`) itself; a fetched schema that pins nothing (`true`, `{}`) let version 2 through.
 - Quarantined, not edited (above the marker): line 133's envelope text gives `window` as `{start, end}`; the type sketch's `WindowEcho`, the schema, the README and the output also carry `start_ts`/`end_ts`. The type sketch and schema are authoritative.
 
-### Review-gauntlet fixes (round 5, 2026-11-20; uncommitted fixer pass)
+### Review-gauntlet fixes (round 5, 2026-11-20; committed)
 
 The user chose to keep and harden the regular-file stdout undo (round 4) rather than remove it. One redesign covers the seven findings against it; each rule has a mutation check in a whole-state-space test (`test_failed_write_to_a_regular_file_undo_state_space`: {truncate, empty, at EOF, past EOF, append at start, append at EOF, overwrite within, overwrite past the end, concurrently grown} x {fail before any byte, fail after k bytes, success}; the pipe test covers the same three outcomes):
 - Invariant (narrowed in round 6, below): the undo removes only bytes beyond the file's original end of file, and only if the file is exactly the length the CLI left it. `_undo_point` records `(fd, start, size_before)` before writing and returns `None` (no undo) for anything but a regular file, an `O_APPEND` descriptor (another writer may append at any time), and `start < size_before` (bytes overwritten under `1<>` can't be put back). After a failed write, `_undo_partial_write` truncates to `size_before` (not `start`, so an offset past the end leaves no zero-filled gap) only when the size is exactly `start + written`, then seeks back to `start`. Success never truncates. Round 4 truncated to the start offset, treated append mode as undoable, and ran on overwrites, so it could shorten an existing file, grow one past its original length, or cut another `>>` writer's bytes.
@@ -1230,7 +1230,7 @@ The user chose to keep and harden the regular-file stdout undo (round 4) rather 
 - README: the window floor (at or after 1970, after padding) replaces "arbitrarily far in the past"; the `--calendar` example says an id match suppresses title matching for that selector.
 - Rejected: a listed (cleaned) calendar id equal to another calendar's raw id selects the raw-id match only. It needs a lone-surrogate id colliding with another id ending in U+FFFD; EventKit ids are UUIDs, and the round 4 rule (an exact raw id wins) is deliberate. The CHANGELOG golden line "Reviewed after the fact" is accurate: the round of timezone goldens was committed in `8f31781` for after-the-fact review, as Phase 5b Progress records.
 
-### Review-gauntlet fixes (round 6, 2026-11-20; uncommitted fixer pass)
+### Review-gauntlet fixes (round 6, 2026-11-20; committed)
 
 Six findings, one root cause: the docs promised the undo runs "only if nothing else has changed the file since", but `_undo_partial_write` checks only that the size is `start + written`, and `_undo_point` allowed two cases where that check passes after another writer's bytes landed below the CLI's:
 - Past EOF (`start > size_before`): bytes another writer put in the gap `[size_before, start)` (or appended there before the CLI's first write) were cut by the truncate to `size_before`, with no race. `_undo_point` now allows the undo only when `start == st_size` (the CLI extends the file exactly at its end); past EOF keeps its prefix like append and overwrite. `_undo_point` returns `(fd, start)` and the truncate goes to `start`.
@@ -1238,9 +1238,13 @@ Six findings, one root cause: the docs promised the undo runs "only if nothing e
 - Docs (README exit-code note, CHANGELOG, `cli.py` docstrings, the R11 sentence above the marker) now state the exact guarantee: best effort, removed only if the file is still exactly the length the CLI left it. The residual is stated plainly: a same-length rewrite of the CLI's bytes by another writer, and a writer racing the final check, can still lose bytes. No locking was added.
 - Tests: the state-space test gains `past_eof_gap_filled` and `rewritten_same_length` (the documented residual) and marks `past_eof` not undoable; `test_writer_between_the_offset_and_size_reads_keeps_its_bytes` runs a shared-description writer after the first of the two reads. Mutation checks: allowing `start > st_size` again fails `past_eof` and `past_eof_gap_filled`; round 5's `cli.py` fails those two and the between-reads test.
 
+### Review-gauntlet result (6 rounds, 2026-11-20)
+
+Findings per round: 18, 14, 16, 5, 10, 6. The ledger ended `non-converge`: after round 4's minimum of 5, rounds 5 and 6 each found problems in the previous round's own stdout-undo code. Round 6's six findings were one mismatch between the undo's documented guarantee and its length check, now fixed and documented as best effort. Findings in the shipped contract converged over rounds 1 to 4. The final undo design is in the round 6 note above.
+
 ### Next step
 
-Phase 0 is done and the plan was reviewed (marker above). Remaining: push the branch, merge PR #1, tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
+Phase 0 is done and the plan was reviewed (marker above). Remaining: merge PR #1 (open, branch pushed), tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
 
 ## Issues & Solutions
 
