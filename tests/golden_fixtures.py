@@ -47,10 +47,10 @@ ROOM = raw_participant(name="Room 1", url="urn:x-room:example-1", role=4, status
 def build_window_fixture() -> CliFixture:
     """A 16:00-17:00Z window (epoch input) padded by 15 minutes."""
     events = [
-        # starts 10 min before --start: only included because of the padding
+        # 15:50-15:55Z: ends before --start (16:00Z), so only the 15-minute padding includes it
         raw_event(
             "2025-11-19T15:50:00Z",
-            "2025-11-19T16:05:00Z",
+            "2025-11-19T15:55:00Z",
             calendar_id="cal-work",
             external_id="ext-early",
             event_identifier="evt-early",
