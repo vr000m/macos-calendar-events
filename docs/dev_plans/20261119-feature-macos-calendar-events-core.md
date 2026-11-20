@@ -985,6 +985,16 @@ Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by tick
 - The non-darwin subprocess test (`python -m macos_calendar_events.cli calendars` → 4) is skipped on darwin and runs on ubuntu CI. A simulated variant (a subprocess that sets `sys.platform = "linux"` before calling `main`) runs everywhere.
 - Locally, the suite and mypy pass on 3.11, 3.12.7 and 3.13, each in its own temp env. The ubuntu (no PyObjC) job hasn't run, because nothing was pushed.
 - **Review slot (user-run):** `uv run python scripts/regen_goldens.py`; hand-review `tests/golden/window-v1.json` and `tests/golden/calendars-v1.json`; add a CHANGELOG line; commit; then `/conduct --resume` for 5b.
+- Review slot outcome: the user approved the goldens after four fixture fixes (padding-only "Early sync" end 15:55Z, a canceled row inside the window, a distinct Work color, a tighter fixture test) and committed them with a CHANGELOG line in `f781369`.
+
+**Phase 5b**
+- Timezone coverage (user steering, 2026-11-20): `tests/test_timezones.py` (Tokyo/Kolkata/Helsinki timed instants, local date vs UTC date, all-day local midnights incl. the 23 h / 25 h Helsinki DST days, Helsinki DST-day window edges, widen-then-filter per zone), zone-aware serialization and fall-back `fold` cases in `test_models.py`, and non-UTC input rejection in `test_window_query.py`. Expected values are hand-written and were cross-checked with `TZ=<zone> /bin/date`.
+- The window golden gained 6 rows (Tokyo/Kolkata/Helsinki timed; JP/IN/FI all-day) plus 4 fixture rows that the widened query fetches but the overlap filter drops. Existing rows are byte-identical (the diff is insertions only); `calendars-v1.json` is unchanged. Committed in `8f31781` with a CHANGELOG line, for after-the-fact review.
+  - Deviation: the golden window is fixed on 2025-11-19, so the Helsinki DST transitions are covered by unit tests only, not by golden rows. Each all-day golden row simulates a Mac in that zone (local components are per row); a real Mac reports one system zone for all rows.
+- Commit order kept every commit green: fixture rows, then goldens, then `tests/test_cli_contract.py` (which compares against the goldens byte for byte).
+- `tests/test_cli_contract.py`: 21 tests (schema + golden byte equality for both commands, empty stdout on exits 1/2/3/4/5 and argparse errors, `--help`/`--version`/unparseable `--start` through both `python -m` and the venv console script). Full non-live suite: 333 passed, 1 skipped (non-darwin), 2 deselected (live).
+- **Validation cmd (run 2026-11-20 ~11:20 PST):** run verbatim as a child of a one-shot launchd job whose executable is the granted uv 3.12.7 interpreter (from the agent shell the preflight is `not_determined`). Exit 0; preflight `full_access`; both CLI outputs validated; stderr 0 bytes. Counts only: 16 calendars, 12 events in now ± 1 d. The job was removed; nothing was written to the repo. No `--prompt`.
+- **Manual validation not run** (user-run: `tccutil reset`, prompt, the denied path, re-grant). Phase 5b stays open until it is recorded.
 
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
