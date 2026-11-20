@@ -395,6 +395,15 @@ def test_parse_instant_text_rejects(text: str) -> None:
         parse_instant_text(text)
 
 
+@pytest.mark.parametrize(
+    "text", ["2025-11-19T16:00:00Z\n", "2025-11-19T16:00:00+00:00\n", "2025-11-19T16:00:00Z\r\n"]
+)
+def test_rfc3339_with_trailing_newline_fails_the_grammar_check(text: str) -> None:
+    # Rejected by the anchored grammar itself (fullmatch), not only later by fromisoformat.
+    with pytest.raises(InvalidQueryError, match="expected epoch seconds or an RFC 3339"):
+        parse_instant_text(text)
+
+
 # --- ids -----------------------------------------------------------------------------
 
 

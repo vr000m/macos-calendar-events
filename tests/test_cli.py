@@ -321,6 +321,7 @@ def test_non_darwin_module_run() -> None:
         ("1763571600", "1763568000", 2),  # end <= start
         ("1763568000", "1763568000", 2),
         ("1763568000\n", "1763571600", 2),  # ``$`` must not accept a trailing newline
+        ("2025-11-19T16:00:00Z\n", "2025-11-19T17:00:00Z", 2),  # same for RFC 3339
         ("9" * 5000, "1763571600", 2),  # beyond CPython's int-from-string digit limit
         ("253402214400", "253402300799", 2),  # widening by a day would pass year 9999
     ],
