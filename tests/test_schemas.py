@@ -3,6 +3,7 @@
 import copy
 import dataclasses
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import StrEnum
 from importlib.resources import files
@@ -235,3 +236,56 @@ def test_pre_1970_negative_ts_validates() -> None:
     doc = json.loads(window_to_json([event], window=WINDOW))
     assert doc["events"][0]["start_ts"] < 0
     assert _errors(WINDOW_SCHEMA, doc) == []
+
+
+# --- anchored patterns: Python's `$` also matches before a final newline -------------
+
+
+def _with(doc: Json, path: tuple[str | int, ...], change: Callable[[str], str]) -> Json:
+    """A deep copy of ``doc`` with the string at ``path`` replaced by ``change(old)``."""
+    probe = copy.deepcopy(doc)
+    target: Any = probe
+    for step in path[:-1]:
+        target = target[step]
+    target[path[-1]] = change(target[path[-1]])
+    return probe
+
+
+def _pattern_paths(schema: Json, doc: Json) -> list[tuple[str | int, ...]]:
+    """Paths of every string the validator checks against a ``pattern`` in ``doc``."""
+    validator = _validator(schema)
+    paths: list[tuple[str | int, ...]] = []
+
+    def walk(instance: object, path: tuple[str | int, ...]) -> None:
+        if isinstance(instance, dict):
+            for key, value in instance.items():
+                walk(value, (*path, key))
+        elif isinstance(instance, list):
+            for index, value in enumerate(instance):
+                walk(value, (*path, index))
+        elif isinstance(instance, str):
+            probe = _with(doc, path, lambda value: value + "\u0000")  # breaks any anchored pattern
+            if any(e.validator == "pattern" for e in validator.iter_errors(probe)):
+                paths.append(path)
+
+    walk(doc, ())
+    return paths
+
+
+@pytest.mark.parametrize(
+    ("name", "schema"), [("window-v1", WINDOW_SCHEMA), ("calendars-v1", CALENDARS_SCHEMA)]
+)
+@pytest.mark.parametrize("affix", ["\n", "\r\n", "\n\n", " ", "x", "0"])
+@pytest.mark.parametrize("where", ["suffix", "prefix"])
+def test_patterned_strings_reject_any_extra_character(
+    name: str, schema: Json, affix: str, where: str
+) -> None:
+    from pathlib import Path
+
+    doc: Json = json.loads((Path(__file__).parent / "golden" / f"{name}.json").read_text("utf-8"))
+    assert _errors(schema, doc) == []
+    paths = _pattern_paths(schema, doc)
+    assert paths, "the golden document exercises the patterned fields"
+    for path in paths:
+        probe = _with(doc, path, lambda v: v + affix if where == "suffix" else affix + v)
+        assert _errors(schema, probe), (path, repr(affix), where)

@@ -16,7 +16,8 @@
       "description": "UTC instant, RFC 3339 with whole seconds and a Z suffix.",
       "type": "string",
       "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$",
+      "maxLength": 20
     },
     "instant_ts": {
       "description": "The sibling instant as integer Unix epoch seconds; may be negative (before 1970).",

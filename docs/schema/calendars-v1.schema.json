@@ -29,7 +29,8 @@
         "color_hex": {
           "description": "sRGB color as #RRGGBB (uppercase hex), or null when conversion fails.",
           "type": ["string", "null"],
-          "pattern": "^#[0-9A-F]{6}$"
+          "pattern": "^#[0-9A-F]{6}$",
+          "maxLength": 7
         },
         "read_only": {"description": "not EKCalendar.allowsContentModifications", "type": "boolean"}
       }
