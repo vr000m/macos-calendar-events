@@ -1212,6 +1212,15 @@ Each fix has a table-driven regression test that failed with the fix reverted (m
 - `scripts/check_imports.py` bans every top-level module the PyObjC dependencies install (adds `Cocoa`, `CoreFoundation`, `PyObjCTools`, `PyObjCTest`); `Cocoa` re-exports Foundation and AppKit.
 - `scripts/check_privacy.sh` passes `./$path` to grep: a file named `-` made grep read stdin (the rest of the NUL listing), so it and every later path went unscanned.
 
+### Review-gauntlet fixes (round 4, 2026-11-20; uncommitted fixer pass)
+
+Each fix has a table-driven regression test that failed with the fix reverted (mutation check):
+- R6 regression from round 3: matching the raw id **or** the output id in one pass let an exact raw id also select another calendar whose cleaned id equals it (`cal-\ufffd` vs `cal-\ud83d`). Now a selector equal to a raw id selects that calendar only; otherwise every calendar whose output id equals it; otherwise titles.
+- CLI stdout writer: the text-only path (round 3) ignored the count `write()` returns, so a short write exited 0 with truncated output. It now continues short writes and fails on 0, like the binary path; `None` (a legacy file-like) means all written.
+- R12: the RFC 3339 grammar allows hours 00-23 only. Python 3.14's `fromisoformat` maps `T24:00:00` to the next day's midnight, so the bound can't be left to it.
+- README integration example checks `schema_version == 1` (not `True`) itself; a fetched schema that pins nothing (`true`, `{}`) let version 2 through.
+- Quarantined, not edited (above the marker): line 133's envelope text gives `window` as `{start, end}`; the type sketch's `WindowEcho`, the schema, the README and the output also carry `start_ts`/`end_ts`. The type sketch and schema are authoritative.
+
 ### Next step
 
 Phase 0 is done and the plan was reviewed (marker above). Remaining: push the branch, merge PR #1, tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
