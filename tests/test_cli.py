@@ -416,6 +416,30 @@ def test_golden_fixtures_render_schema_valid_output(run: Callable[..., Out]) -> 
     # Canceled events are returned with their status (R5).
     canceled = [e for e in result.doc["events"] if e["status"] == "canceled"]
     assert [e["title"] for e in canceled] == ["Canceled check-in"]
+
+    # Zone rows (expected values hand-checked with TZ=<zone> /bin/date).
+    zone_rows = {
+        t: (events[t]["start"], events[t]["end"], events[t]["start_date"], events[t]["end_date"])
+        for t in ("Tokyo sync", "Kolkata review", "Helsinki wrap-up", "JP Day", "IN Day", "FI Day")
+    }
+    assert zone_rows == {
+        "Tokyo sync": ("2025-11-19T16:00:00Z", "2025-11-19T16:30:00Z", None, None),
+        "Kolkata review": ("2025-11-19T16:15:00Z", "2025-11-19T16:45:00Z", None, None),
+        "Helsinki wrap-up": ("2025-11-19T17:00:00Z", "2025-11-19T17:15:00Z", None, None),
+        "JP Day": ("2025-11-19T15:00:00Z", "2025-11-20T15:00:00Z", "2025-11-20", "2025-11-21"),
+        "IN Day": ("2025-11-18T18:30:00Z", "2025-11-19T18:30:00Z", "2025-11-19", "2025-11-20"),
+        "FI Day": ("2025-11-18T22:00:00Z", "2025-11-19T22:00:00Z", "2025-11-19", "2025-11-20"),
+    }
+    assert events["Tokyo sync"]["time_zone"] == "Asia/Tokyo"
+    assert events["Kolkata review"]["time_zone"] == "Asia/Kolkata"
+    wrap_up = events["Helsinki wrap-up"]  # selected only because of the padding
+    assert wrap_up["start_ts"] == unpadded[1] and wrap_up["end_ts"] == padded[1]
+    # Widened query fetched these; strict overlap filtered them out.
+    fetched = {
+        r.title for r in window_fixture.source.events(*window_fixture.source.ranges[0][:2], None)
+    }
+    for title in ("Helsinki after", "JP Next Day", "IN Next Day", "FI Prev Day"):
+        assert title in fetched and title not in events
     calendars_fixture = build_calendars_fixture()
     result = run(calendars_fixture.argv, calendars_fixture.source)
     assert result.code == 0
