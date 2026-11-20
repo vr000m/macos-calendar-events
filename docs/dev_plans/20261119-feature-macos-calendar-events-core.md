@@ -835,7 +835,8 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 - README commands are executed verbatim on the Mac, except `tccutil reset` and the pinned-tag install (which gets its own post-tag check).
 - **R15:** the Phase 6 validation command proves the built wheel runs `--version`, contains `py.typed` and both schemas, and its `METADATA` carries `License-Expression: BSD-2-Clause`, `Requires-Python: >=3.11` and the darwin-only PyObjC requirement.
 
-<!-- reviewed: YYYY-MM-DD @ <hash> -->
+<!-- reviewed: 2026-11-20 @ 2ce6b3ccc4691a4678bfb9a7068dc13e5676be42 -->
+
 <!-- /review-plan writes the marker line above. Everything below is the workspace: edits here do NOT invalidate the marker. -->
 
 ## Progress
