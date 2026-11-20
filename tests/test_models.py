@@ -126,6 +126,26 @@ def test_window_to_json_exact_text() -> None:
     assert window_to_json([TIMED, ALL_DAY], window=WINDOW) == TWO_EVENT_JSON
 
 
+# 2025-11-19T16:00:00Z and 2025-11-21T16:00:00Z: the bounds of WINDOW as int epochs.
+_INT_WINDOW = (1763568000, 1763740800)
+
+
+@pytest.mark.parametrize("start_is_int", [False, True])
+@pytest.mark.parametrize("end_is_int", [False, True])
+def test_window_to_json_accepts_the_bound_forms_events_in_window_accepts(
+    start_is_int: bool, end_is_int: bool
+) -> None:
+    start = _INT_WINDOW[0] if start_is_int else WINDOW[0]
+    end = _INT_WINDOW[1] if end_is_int else WINDOW[1]
+    assert window_to_json([TIMED, ALL_DAY], window=(start, end)) == TWO_EVENT_JSON
+
+
+@pytest.mark.parametrize("bad", [True, 1.5, "1763568000", None])
+def test_window_to_json_rejects_other_bound_types(bad: object) -> None:
+    with pytest.raises(TypeError):
+        window_to_json([], window=(bad, WINDOW[1]))  # type: ignore[arg-type]
+
+
 def test_participant_to_dict_hand_written() -> None:
     assert ORGANIZER.to_dict() == {
         "name": "Alex Example",

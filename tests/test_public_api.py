@@ -73,6 +73,22 @@ def test_status_and_request_return_access_status(fake: FakeSource) -> None:
     assert fake.requests == [5.0, 60.0]
 
 
+def test_request_access_default_is_the_read_gate_timeout(fake: FakeSource) -> None:
+    import importlib
+
+    from macos_calendar_events import _api
+
+    # One constant for both waits: the public default follows ACCESS_TIMEOUT_S.
+    original = _api.ACCESS_TIMEOUT_S
+    _api.ACCESS_TIMEOUT_S = 42.0  # type: ignore[misc]
+    try:
+        importlib.reload(m).request_access()
+        assert fake.requests == [42.0]
+    finally:
+        _api.ACCESS_TIMEOUT_S = original  # type: ignore[misc]
+        importlib.reload(m)
+
+
 def test_reexported_names() -> None:
     expected = {
         "SCHEMA_VERSION",

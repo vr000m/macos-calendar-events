@@ -91,6 +91,6 @@ def authorization_status() -> AccessStatus:
     return _api.authorization_status(_eventkit.default_source)
 
 
-def request_access(timeout: float = 60.0) -> AccessStatus:
+def request_access(timeout: float = _api.ACCESS_TIMEOUT_S) -> AccessStatus:
     """Request full Calendar access (may show the system prompt) and wait up to ``timeout``."""
     return _api.request_access(_eventkit.default_source, timeout)

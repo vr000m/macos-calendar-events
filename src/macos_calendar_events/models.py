@@ -6,11 +6,12 @@ import calendar as _calendar
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from enum import StrEnum
 from typing import Final, Literal, TypedDict
 
 SCHEMA_VERSION: Final = 1
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 class AccessStatus(StrEnum):
@@ -214,9 +215,19 @@ def _dumps(document: object) -> str:
     return json.dumps(document, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
 
 
-def window_to_json(events: Sequence[Event], *, window: tuple[datetime, datetime]) -> str:
-    """Serialize a window document; ``window`` is the padded caller window (not the query range)."""
-    start, end = window
+def _window_bound(value: datetime | int) -> datetime:
+    """A window bound in either form ``events_in_window`` accepts: aware datetime or int epoch."""
+    if isinstance(value, bool) or not isinstance(value, datetime | int):
+        raise TypeError("window bounds must be aware datetimes or int epoch seconds")
+    return value if isinstance(value, datetime) else _EPOCH + timedelta(seconds=value)
+
+
+def window_to_json(
+    events: Sequence[Event], *, window: tuple[datetime | int, datetime | int]
+) -> str:
+    """Serialize a window document; ``window`` is the padded caller window (not the query range),
+    as aware datetimes or int epoch seconds (the same forms ``events_in_window`` accepts)."""
+    start, end = (_window_bound(bound) for bound in window)
     document: WindowDocument = {
         "schema_version": SCHEMA_VERSION,
         "window": {
