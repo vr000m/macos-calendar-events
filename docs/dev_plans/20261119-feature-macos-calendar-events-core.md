@@ -937,6 +937,13 @@ Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by tick
 - `check_privacy.sh` allows RFC 2606 names: `example.com/.org/.net` and the reserved TLDs `.test`, `.example`, `.invalid`, `.localhost`, each including subdomains, plus `*.noreply.github.com`.
 - Not done (user-run manual step): `git push -u origin feature/core-events-api && gh run watch --exit-status`. CI has therefore not run yet.
 
+**Phase 2**
+- `Participant` and `CalendarRef` also have `to_dict()` (the sketch lists it only on `CalendarInfo` and `Event`); they are used by `Event.to_dict`.
+- Serializing a naive `datetime` raises `ValueError` (it can't happen via `_mapping`, which only produces aware UTC values).
+- `_ts` values use `calendar.timegm`, so they agree with the truncated `…Z` string for pre-1970 instants too (`int(dt.timestamp())` would round toward zero and disagree for negative sub-second values).
+- `CalendarAccessError`'s message is exactly the R9 remediation text; the status is on `.status`. `CalendarNotFoundError`'s message names only the unmatched selectors via `repr()`; available titles are on `.available_titles`.
+- Schemas use `$defs` with `$ref` for each open enum, so the enum-parity test checks `$defs/<enum>` and that each field references it. RFC 2606 example addresses appear as literals in test fixtures (allowed by R16).
+
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
 This was an author-side pass over skein `review-plan`'s five lenses plus its contradiction pass, run inline by the author instead of in fresh-context agents. **It doesn't replace `/review-plan`. Run that before `/conduct`.** It doesn't write the review marker.
