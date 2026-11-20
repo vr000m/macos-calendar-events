@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/vr000m/macos-calendar-events/v0.1.0/docs/schema/calendars-v1.schema.json",
+  "title": "macos-calendar-events calendars document (schema_version 1)",
+  "description": "stdout of `macos-calendar-events calendars`. All keys are required; unknown keys may be added within v1 and must be ignored. Enum fields are open: map unknown values to \"unknown\".",
+  "type": "object",
+  "required": ["schema_version", "calendars"],
+  "additionalProperties": true,
+  "properties": {
+    "schema_version": {"const": 1},
+    "calendars": {"type": "array", "items": {"$ref": "#/$defs/calendar_info"}}
+  },
+  "$defs": {
+    "nullable_string": {"type": ["string", "null"]},
+    "source_type": {
+      "description": "Open enum. Known values: local, exchange, caldav, mobileme, subscribed, birthdays, unknown.",
+      "type": "string",
+      "x-known-values": ["local", "exchange", "caldav", "mobileme", "subscribed", "birthdays", "unknown"]
+    },
+    "calendar_info": {
+      "type": "object",
+      "required": ["id", "title", "source_title", "source_type", "color_hex", "read_only"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"$ref": "#/$defs/nullable_string"},
+        "source_title": {"$ref": "#/$defs/nullable_string"},
+        "source_type": {"$ref": "#/$defs/source_type"},
+        "color_hex": {
+          "description": "sRGB color as #RRGGBB (uppercase hex), or null when conversion fails.",
+          "type": ["string", "null"],
+          "pattern": "^#[0-9A-F]{6}$"
+        },
+        "read_only": {"description": "not EKCalendar.allowsContentModifications", "type": "boolean"}
+      }
+    }
+  }
+}
