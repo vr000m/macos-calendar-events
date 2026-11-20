@@ -20,9 +20,12 @@ secondary.
 ## Install
 
 ```sh
-uv tool install --python 3.12.7 git+https://github.com/vr000m/macos-calendar-events@v0.1.0
+uv tool install --python 3.12.7 macos-calendar-events==0.1.0
 macos-calendar-events --version
 ```
+
+To install the same release from git instead:
+`uv tool install --python 3.12.7 git+https://github.com/vr000m/macos-calendar-events@v0.1.0`
 
 Pin `--python` to an exact version (any 3.11+ works; 3.12.7 is the tested one). Without it, uv
 picks the newest Python it can find (for example 3.13), and the Calendar grant is keyed to
@@ -105,7 +108,7 @@ prompts unless you pass `--prompt`; without it, a missing grant exits 3 immediat
 - Pin the exact version with `--python` when installing, and grant again after changing it:
 
   ```sh
-  uv tool install --python 3.12.7 --force git+https://github.com/vr000m/macos-calendar-events@v0.1.0
+  uv tool install --python 3.12.7 --force macos-calendar-events==0.1.0
   ```
 
   To see which interpreter a tool install uses:
