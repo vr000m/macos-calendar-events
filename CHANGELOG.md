@@ -13,7 +13,7 @@ All notable changes to this project are documented here. Golden-file (`tests/gol
 ### Fixed
 - All-day `start_date`/`end_date` use the Gregorian calendar. They followed the Mac's Calendar preference before, so a Buddhist-calendar Mac wrote `2568-11-19` for 2025-11-19.
 - `scripts/check_privacy.sh` exits 2 when `git ls-files` fails. It passed with nothing scanned before.
-- `window` exits 2 (was 1, `internal error`) for an oversized `--pad-minutes`, an end later than 9999-12-30T23:59:59Z (the last instant that still allows the one-day query margin), an epoch string of 4301 or more digits, and an epoch string with a trailing newline (the last was accepted).
+- `window` exits 2 (was 1, `internal error`) for an oversized `--pad-minutes`, an end later than 9999-12-30T23:59:59Z (the last instant that still allows the one-day query margin), an epoch string of 4301 or more digits, and an epoch string with a trailing newline (the last was accepted). The Python API raises `InvalidQueryError` for the same end bound (it raised `OverflowError` before).
 - `events_in_window(calendars="Work")` raises `InvalidQueryError`. It was read as one selector per character. `CalendarNotFoundError` can be pickled and copied.
 ### Changed
 - Golden `tests/golden/window-v1.json`: added timed rows in Asia/Tokyo, Asia/Kolkata and Europe/Helsinki (Helsinki row selected only by padding) and all-day rows for each zone (local-midnight bounds, exclusive `end_date`). `calendars-v1.json` unchanged. Reviewed after the fact.
