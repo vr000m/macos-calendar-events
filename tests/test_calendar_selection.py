@@ -102,6 +102,21 @@ def test_id_match_wins_over_title_match() -> None:
     assert _ids(select_calendars(CALS, ["Home"])) == ["Home"]
 
 
+_LONE = "\ud83d"
+
+
+@pytest.mark.parametrize("raw_id", ["cal-1", "cal-\U0001f600", "cal-" + _LONE, _LONE + "cal"])
+@pytest.mark.parametrize("form", ["raw", "listed"])
+def test_exact_id_wins_over_a_title_equal_to_it(raw_id: str, form: str) -> None:
+    """R6: a selector equal to a calendar's raw identifier or its listed (output) id selects
+    that calendar by id, even when another calendar's title is the same string."""
+    [listed] = to_calendars([raw_calendar(raw_id)])
+    selector = raw_id if form == "raw" else listed.id
+    target = raw_calendar(raw_id, title="Target")
+    decoy = raw_calendar("decoy", title=selector)
+    assert _ids(select_calendars([target, decoy], [selector])) == [raw_id]
+
+
 def test_unknown_selector_raises_even_with_a_valid_one() -> None:
     with pytest.raises(CalendarNotFoundError) as info:
         select_calendars(CALS, ["id-home", "Nope"])

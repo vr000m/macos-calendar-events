@@ -329,7 +329,7 @@ ID_KINDS = {
 
 
 @pytest.mark.parametrize("kind", sorted(ID_KINDS))
-@pytest.mark.parametrize("select", ["all", "title", "listed_id"])
+@pytest.mark.parametrize("select", ["all", "title", "listed_id", "raw_id"])
 def test_calendar_id_round_trips_through_the_store_lookup(kind: str, select: str) -> None:
     from macos_calendar_events import _api
     from macos_calendar_events._mapping import unicode_text
@@ -340,7 +340,9 @@ def test_calendar_id_round_trips_through_the_store_lookup(kind: str, select: str
     [listed] = _api.query_calendars(lambda: source, prompt=False)
     assert listed.id == unicode_text(raw_id)
     listed.id.encode("utf-8")  # output ids are always valid UTF-8
-    selectors = {"all": None, "title": ["Work"], "listed_id": [listed.id]}[select]
+    selectors = {"all": None, "title": ["Work"], "listed_id": [listed.id], "raw_id": [raw_id]}[
+        select
+    ]
     result = _api.query_events(
         lambda: source, START, END, calendars=selectors, include_notes=False, prompt=False
     )

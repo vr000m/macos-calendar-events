@@ -141,48 +141,82 @@ def test_window_to_json_accepts_the_bound_forms_events_in_window_accepts(
 
 
 _PLUS5 = timezone(timedelta(hours=5))
+_S, _E = WINDOW
+_CAP = timedelta(days=3 * 365 - 2)
+_LAST_END = datetime(9999, 12, 30, 23, 59, 59, tzinfo=UTC)  # latest end the query margin allows
+
+_BOUNDS = [  # (bound, parses): each is tried as the start and as the end of a window
+    (1763600000, True),  # an int epoch inside WINDOW
+    (datetime(2025, 11, 20, 16, tzinfo=ZoneInfo("UTC")), True),
+    (datetime(2025, 11, 20, 16, 0, 0, 999999, tzinfo=UTC), True),  # truncated, as R18
+    (-5, False),  # negative epoch
+    (10**12, False),  # out of datetime range (was OverflowError)
+    (True, False),
+    (1.5, False),
+    ("1763568000", False),
+    (None, False),
+    (datetime(2025, 11, 19, 16), False),  # naive
+    (datetime(2025, 11, 19, 21, tzinfo=_PLUS5), False),  # aware but not UTC
+    (datetime(1969, 12, 31, 23, 59, 59, tzinfo=UTC), False),  # before 1970
+]
+
+_WINDOWS = [  # (window, valid)
+    (WINDOW, True),
+    (_INT_WINDOW, True),
+    ((_S, _INT_WINDOW[1]), True),
+    ((0, 1), True),  # the 1970 floor
+    ((_S, _S + _CAP), True),  # exactly the span cap
+    ((_S, _S + _CAP + timedelta(seconds=1)), False),  # over the cap
+    ((0, _E), False),  # 1970 to 2025: over the cap
+    ((_S, _S), False),  # empty
+    ((10, 5), False),  # inverted int epochs
+    ((5, 5), False),
+    ((_E, _S), False),  # inverted datetimes
+    ((_LAST_END - timedelta(seconds=1), _LAST_END), True),
+    ((_LAST_END, _LAST_END + timedelta(seconds=1)), False),  # past the year-9999 bound
+    *[((b, _E), ok) for b, ok in _BOUNDS],
+    *[((_S, b), ok) for b, ok in _BOUNDS],
+]
 
 
-@pytest.mark.parametrize(
-    ("bound", "accepted"),
-    [
-        (0, True),
-        (1763568000, True),
-        (datetime(2025, 11, 19, 16, tzinfo=UTC), True),
-        (datetime(2025, 11, 19, 16, tzinfo=ZoneInfo("UTC")), True),
-        (datetime(2025, 11, 19, 16, 0, 0, 999999, tzinfo=UTC), True),  # truncated, as R18
-        (-5, False),  # negative epoch
-        (10**12, False),  # out of datetime range (was OverflowError)
-        (True, False),
-        (1.5, False),
-        ("1763568000", False),
-        (None, False),
-        (datetime(2025, 11, 19, 16), False),  # naive
-        (datetime(2025, 11, 19, 21, tzinfo=_PLUS5), False),  # aware but not UTC
-        (datetime(1969, 12, 31, 23, 59, 59, tzinfo=UTC), False),  # before 1970
-    ],
-)
-@pytest.mark.parametrize("position", [0, 1])
-def test_window_to_json_bounds_match_events_in_window(
-    bound: object, accepted: bool, position: int
+def _query_accepts(window: tuple[object, object]) -> bool:
+    from macos_calendar_events import _api
+    from macos_calendar_events.errors import InvalidQueryError
+    from tests.fakes import FakeSource
+
+    try:
+        _api.query_events(
+            FakeSource,
+            window[0],  # type: ignore[arg-type]
+            window[1],  # type: ignore[arg-type]
+            calendars=None,
+            include_notes=False,
+            prompt=False,
+        )
+    except InvalidQueryError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize(("window", "valid"), _WINDOWS)
+def test_window_to_json_accepts_exactly_the_windows_events_in_window_accepts(
+    window: tuple[object, object], valid: bool
 ) -> None:
-    """Each bound is accepted or rejected exactly as ``events_in_window`` does (one parser)."""
-    from macos_calendar_events._mapping import parse_instant
+    """Whole windows, not just bounds: the serializer and the query share one check."""
+    from macos_calendar_events._mapping import parse_window
     from macos_calendar_events.errors import InvalidQueryError
 
-    window = [WINDOW[0], WINDOW[1]]
-    window[position] = bound  # type: ignore[call-overload]
-    if accepted:
-        doc = json.loads(window_to_json([], window=(window[0], window[1])))
-        echoed = parse_instant(bound)  # type: ignore[arg-type]
-        assert doc["window"]["start" if position == 0 else "end"] == echoed.strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
+    assert _query_accepts(window) is valid
+    if valid:
+        doc = json.loads(window_to_json([], window=window))  # type: ignore[arg-type]
+        start, end = parse_window(*window)  # type: ignore[arg-type]
+        assert (doc["window"]["start_ts"], doc["window"]["end_ts"]) == (
+            int(start.timestamp()),
+            int(end.timestamp()),
         )
     else:
         with pytest.raises(InvalidQueryError):
-            window_to_json([], window=(window[0], window[1]))
-        with pytest.raises(InvalidQueryError):
-            parse_instant(bound)  # type: ignore[arg-type]
+            window_to_json([], window=window)  # type: ignore[arg-type]
 
 
 def test_participant_to_dict_hand_written() -> None:

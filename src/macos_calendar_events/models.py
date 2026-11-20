@@ -219,13 +219,15 @@ def window_to_json(
 ) -> str:
     """Serialize a window document; ``window`` is the padded caller window (not the query range).
 
-    Each bound goes through the same parser as ``events_in_window`` (a non-negative int epoch
-    or an aware UTC datetime at or after 1970), so it accepts and rejects exactly what that
-    function does, raising ``InvalidQueryError``.
+    The window goes through the same check as ``events_in_window`` (``_mapping.parse_window``:
+    each bound a non-negative int epoch or an aware UTC datetime at or after 1970, ``end >
+    start``, the span cap and year-9999 bound), so it accepts and rejects exactly the windows
+    that function does, raising ``InvalidQueryError``.
     """
-    from ._mapping import parse_instant  # imported here: _mapping imports this module
+    # Imported at call time: _mapping builds this module's types, so it imports models.
+    from ._mapping import parse_window
 
-    start, end = (parse_instant(bound) for bound in window)
+    start, end = parse_window(*window)
     document: WindowDocument = {
         "schema_version": SCHEMA_VERSION,
         "window": {

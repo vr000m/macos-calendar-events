@@ -237,6 +237,14 @@ def validate_window(start: datetime, end: datetime) -> None:
         raise InvalidQueryError(f"window longer than {MAX_WINDOW.days} days")
 
 
+def parse_window(start: datetime | int, end: datetime | int) -> tuple[datetime, datetime]:
+    """Python API window: both bounds through :func:`parse_instant`, then
+    :func:`validate_window`. The one check for every caller-supplied window."""
+    window = parse_instant(start), parse_instant(end)
+    validate_window(*window)
+    return window
+
+
 def query_range(start: datetime, end: datetime) -> tuple[datetime, datetime]:
     return start - QUERY_MARGIN, end + QUERY_MARGIN
 
@@ -273,7 +281,8 @@ def select_calendars(
 ) -> list[RawCalendar]:
     """R6: id match first, else casefolded title match; every selector must match.
 
-    Selectors are compared with the output id (:func:`unicode_text` of the raw id); the
+    A selector matches by id when it equals the raw ``calendarIdentifier`` or the output id
+    (:func:`unicode_text` of the raw id; the two differ only for a lone surrogate). The
     returned records keep their raw ids for the adapter's lookup.
     """
     if selectors is None:
@@ -283,7 +292,7 @@ def select_calendars(
     chosen: set[str] = set()
     unmatched: list[str] = []
     for selector in selectors:
-        by_id = [c.id for c in cals if unicode_text(c.id) == selector]
+        by_id = [c.id for c in cals if selector in (c.id, unicode_text(c.id))]
         if by_id:
             chosen.update(by_id)
             continue
