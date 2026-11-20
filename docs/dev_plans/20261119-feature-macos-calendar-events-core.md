@@ -843,7 +843,7 @@ def request_access(timeout: float = 60.0) -> AccessStatus: ...
 
 - Spike 0 (EventKit and TCC): done 2026-11-19; findings below. This line is deliberately not a checkbox, so `/conduct` doesn't parse it as a phase.
 - Do not tick Phases 1–6 by hand during a `/conduct` run. The conductor tracks them, and manual ticks shift its phase index. Leave them unticked until the run completes.
-- Status 2026-11-20: Phases 1–6 are implemented and committed on `feature/core-events-api` (PR #1), plus four `/code-review xhigh --fix` commits (see Findings, "Post-review fixes"). The boxes below stay unticked because the work was not driven by `/conduct`.
+- Status 2026-11-20: Phases 1–6 are implemented and committed on `feature/core-events-api` (PR #1), plus four `/code-review xhigh --fix` commits (see Findings, "Post-review fixes"). The run emulated `/conduct` (non-autonomous) and recorded all seven phases, 1–6 including 5a/5b, as completed in `.conduct/state-*.json` (`completed_phases`). The boxes below were not ticked during the run, per the rule above; ticking them is the user's call now that the run is complete.
 - [ ] Phase 1: Scaffold, tooling, CI
 - [ ] Phase 2: Domain types, JSON serialization and schemas
 - [ ] Phase 3: Pure core against a fake source
