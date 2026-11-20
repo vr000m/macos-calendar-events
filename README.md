@@ -57,7 +57,9 @@ prompts unless you pass `--prompt`; without it, a missing grant exits 3 immediat
   of at least 70 s, because the CLI waits up to 60 s for the answer. Exit 0 means granted;
   exit 3 means denied, or that no prompt could be shown. Normal runs keep a short timeout
   (10 s is plenty).
-- **Standalone launchd use:** a one-shot job grants the CLI's own interpreter. Save this as
+- **Standalone launchd or cron use:** a one-shot launchd job grants the CLI's own
+  interpreter, and that grant also covers cron jobs that run the CLI (see
+  [cron](#cron)). The job runs once at load and is not kept alive. Save this as
   `~/Library/LaunchAgents/local.macos-calendar-events.grant.plist` (replace `<you>`):
 
   ```xml
@@ -80,10 +82,12 @@ prompts unless you pass `--prompt`; without it, a missing grant exits 3 immediat
   Then:
 
   ```sh
-  launchctl bootstrap gui/$UID ~/Library/LaunchAgents/local.macos-calendar-events.grant.plist
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.macos-calendar-events.grant.plist
   # click Allow in the prompt
-  launchctl bootout gui/$UID/local.macos-calendar-events.grant
+  launchctl bootout gui/$(id -u)/local.macos-calendar-events.grant
   ```
+
+  Afterwards System Settings shows an entry named after the interpreter (e.g. `python3.12`).
 
 - **System Settings → Privacy & Security → Calendars** can't add apps. It only toggles
   entries that have already prompted.
@@ -107,8 +111,21 @@ prompts unless you pass `--prompt`; without it, a missing grant exits 3 immediat
   To see which interpreter a tool install uses:
   `readlink -f ~/.local/share/uv/tools/macos-calendar-events/bin/python`.
 
-- **cron** is unverified. Prefer launchd.
-- Any script run under launchd by a granted interpreter inherits its Calendar access.
+- Any script run under launchd or cron by a granted interpreter inherits its Calendar access.
+
+### cron
+
+cron jobs are attributed to the CLI's interpreter, just like launchd jobs, so a cron job
+exits 3 until that interpreter is granted. Grant it once with the
+[one-shot launchd recipe](#granting-calendar-access) above; the same cron job then works.
+A grant from your terminal does not cover cron.
+
+cron runs commands with a minimal environment, and `$HOME` or `~` in a crontab is easy to
+get wrong, so use absolute paths everywhere (replace `<you>`):
+
+```crontab
+*/15 * * * * /Users/<you>/.local/bin/macos-calendar-events calendars > /Users/<you>/calendars.json 2>> /Users/<you>/calendars.err
+```
 
 ## Integrating from another program
 
