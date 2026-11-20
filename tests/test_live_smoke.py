@@ -8,7 +8,7 @@ import itertools
 import json
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from importlib.resources import files
@@ -121,18 +121,24 @@ def _print_counts(counts: dict[str, int]) -> None:
         print(f"{name}={counts[name]}")
 
 
-def _keys(events: list[Event]) -> set[tuple[str, str, datetime]]:
-    return {
-        (e.calendar.id, e.event_identifier or e.external_id or "", e.occurrence_start)
+RowKey = tuple[str, str | None, str | None, datetime, datetime, datetime]
+
+
+def _keys(events: list[Event]) -> Counter[RowKey]:
+    """Each row's identity and instants, counted (a multiset: identical rows all count)."""
+    return Counter(
+        (e.calendar.id, e.event_identifier, e.external_id, e.occurrence_start, e.start, e.end)
         for e in events
-    }
+    )
 
 
 def cap_difference(get_source: Callable[[], EventSource], start: datetime) -> int:
-    """Distinct keys in exactly one of: one query, the union of three chunks (0 = same set).
+    """Rows in one result but not the other: one query vs the three chunks (0 = same rows).
 
-    A set difference, not a size difference: a row missing from the single query must not be
-    masked by a different extra row.
+    Rows are compared as a multiset of full keys (both identifiers, occurrence start, start
+    and end), so a missing row is never masked by a different extra row, by a row that shares
+    its identifiers, or by a duplicate. A row in several chunks (it spans a chunk boundary)
+    counts once: the chunks merge by taking each key's largest count.
     """
 
     def run(a: datetime, b: datetime) -> list[Event]:
@@ -148,11 +154,12 @@ def cap_difference(get_source: Callable[[], EventSource], start: datetime) -> in
     step = MAX_WINDOW / 3
     bounds = [start, start + step, start + 2 * step, end]
     single = _keys(run(start, end))
-    union: set[tuple[str, str, datetime]] = set()
+    union: Counter[RowKey] = Counter()
     for a, b in itertools.pairwise(bounds):
-        union |= _keys(run(a, b))
-    print(f"cap_single={len(single)} cap_union={len(union)} cap_symdiff={len(single ^ union)}")
-    return len(single ^ union)
+        union |= _keys(run(a, b))  # elementwise max
+    difference = sum(((single - union) + (union - single)).values())
+    print(f"cap_single={single.total()} cap_union={union.total()} cap_difference={difference}")
+    return difference
 
 
 # --- live ---------------------------------------------------------------------------
@@ -217,11 +224,18 @@ class _Scripted(FakeSource):
         return self._first if self._calls == 1 else self._chunks
 
 
-def _cap_row(event_id: str) -> Any:
+def _cap_row(spec: str) -> Any:
+    """``"a"``: event ``a`` 10:00-11:00; ``"a@12"``: the same identifiers and occurrence start
+    but ending 12:00."""
     from tests.fakes import raw_event
 
+    event_id, _, end_hour = spec.partition("@")
     # Inside every chunk of the cap window that starts at 2024-01-01.
-    return raw_event("2024-06-01T10:00:00Z", "2024-06-01T11:00:00Z", event_identifier=event_id)
+    return raw_event(
+        "2024-06-01T10:00:00Z",
+        f"2024-06-01T{end_hour or '11'}:00:00Z",
+        event_identifier=event_id,
+    )  # occurrence start defaults to the start: identical for "a" and "a@12"
 
 
 @pytest.mark.parametrize(
@@ -234,6 +248,11 @@ def _cap_row(event_id: str) -> Any:
         ([], ["a"], 1),  # a row missing from the single query (the targeted failure)
         (["a"], [], 1),  # an extra row in the single query
         (["a", "b"], ["a", "c"], 2),
+        (["a"], ["a", "a@12"], 1),  # same identifiers and occurrence start, other end
+        (["a@12"], ["a"], 2),
+        (["a"], ["a", "a"], 1),  # one of two identical rows missing
+        (["a", "a"], ["a"], 1),
+        (["a", "a"], ["a", "a"], 0),
     ],
 )
 def test_cap_difference_compares_sets_not_sizes(
