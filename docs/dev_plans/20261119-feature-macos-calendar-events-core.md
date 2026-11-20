@@ -956,6 +956,20 @@ Phases are recorded in `.conduct/state-*.json` (`completed_phases`), not by tick
 - The darwin-only EventKit constants test ran and passed on this Mac (constants only; no store, no TCC).
 - Modules were written just before their tests in this phase; commits put modules first, then each test file.
 
+**Phase 4**
+- `EventKitNamespace` bundles callables instead of raw classes: `store_class`, `entity_type_event`, `new_store`, `make_date` (epoch → NSDate), `local_components` (NSDate → system-zone Y/M/D/h/m/s via `NSCalendar.currentCalendar()`), and `to_srgb`. That's the same seam with simpler stubs.
+- `to_srgb` reads `redComponent()`/`greenComponent()`/`blueComponent()` after `colorUsingColorSpace_(NSColorSpace.sRGBColorSpace())`. A calendar with no source gets `source_type=-1`, which maps to `unknown`.
+- `requestFullAccessToEventsWithCompletion_` is called inside a small wrapper rather than passed as a bound method, so the allowlist grep sees it. Allowlist (10): `authorizationStatusForEntityType_`, `calendarWithIdentifier_`, `calendarsForEntityType_`, `colorUsingColorSpace_`, `components_fromDate_`, `dateWithTimeIntervalSince1970_`, `eventsMatchingPredicate_`, `instancesRespondToSelector_`, `predicateForEventsWithStartDate_endDate_calendars_`, `requestFullAccessToEventsWithCompletion_`.
+- Fixed `check_readonly.sh` so it no longer reports an empty "stale" line when the allowlist is empty.
+- The live smoke uses `_api` with `prompt=False` (not `list_calendars()`, whose default is `prompt=True`), so it can never prompt.
+- **Validation cmd:** from the agent shell the preflight prints `not_determined` and exits 1 (the responsible process there is the agent app, which has no grant). No prompt was shown.
+- **Live smoke (run 2026-11-20 ~01:45 PST):** run as a one-shot launchd job whose executable is `.venv/bin/python`, i.e. the granted uv 3.12.7 interpreter. Preflight `full_access`; `pytest -m live`: 2 passed.
+  - Counts: calendars 16, events 62 (now ± 7 d), skipped_r3 0. Every violation count was 0: non-aware datetimes, start > end, non-overlapping, empty ids, duplicate ids, window and calendars schema errors.
+  - all-day null dates 0; end_date ≤ start_date 0; timed rows with dates 0.
+  - Shapes: detached 0, floating timed 0, Exchange rows 0, external id in 2+ calendars 0.
+  - Cap consistency (2024-01-01 + 1093 d): single query 3545 distinct keys, union of three chunks 3545, symmetric difference 0.
+  - The job was removed afterwards. Nothing was written to the repo.
+
 ### Authoring self-review (2026-11-19, inline; not a `/review-plan` run)
 
 This was an author-side pass over skein `review-plan`'s five lenses plus its contradiction pass, run inline by the author instead of in fresh-context agents. **It doesn't replace `/review-plan`. Run that before `/conduct`.** It doesn't write the review marker.
