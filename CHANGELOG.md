@@ -5,6 +5,8 @@ All notable changes to this project are documented here. Golden-file (`tests/gol
 Release rule: the `$id` in the packaged and `docs/schema/` schemas names the release tag that first shipped that schema content. Change the `$id` version only in a release that changes schema content, and run the `curl | cmp` check from the dev plan against that tag.
 
 ## Unreleased
+### Added
+- `.github/workflows/publish.yml` publishes to PyPI with trusted publishing when a GitHub release is published. It checks that the tag matches the package version, and the `pypi` environment needs a reviewer's approval before the upload.
 
 ## [0.1.0] - 2026-11-20
 ### Added

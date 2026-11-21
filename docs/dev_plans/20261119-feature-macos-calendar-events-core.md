@@ -1,6 +1,6 @@
 # Task: macos-calendar-events v0.1: read-only EventKit window query library and CLI
 
-**Status**: Complete (PR #1 ready to merge; `v0.1.0` is tagged after merge)
+**Status**: Complete (`v0.1.0` released 2026-11-20 on GitHub and PyPI)
 **Component**: core
 **Assigned to**: Varun Singh (vr000m)
 **Priority**: High
@@ -97,7 +97,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 - R13. Window span cap: EventKit's `predicateForEventsWithStartDate:endDate:calendars:` only matches events within a four-year span, so over-cap windows raise `InvalidQueryError` (CLI exit 2) instead of being silently truncated. The details:
   - **Limit:** the caller's window, measured **after** `--pad-minutes` padding, may be at most **3×365 − 2 days** long. (Decision, run 4: lowered from 4×365 − 2. Phase 0 saw one row in the union of four 365-day queries that the single 1460-day query did not return. It was unexplained, and the range was relative to now and counts-only, so it can't be re-found. The cap keeps a year of margin below the span where that happened, and is **unverified at larger spans**.)
   - **Widening (single owner):** `_api` widens the padded window by **±1 day** via the pure `_mapping.query_range()`, and `EventKitSource.events()` queries exactly the range it receives. The total queried range is therefore at most 3×365 days. Phase 0 measured that EventKit silently truncates spans above 1460 days, so this stays under that limit with margin. The Python overlap filter trims the result back to the window. An opt-in live consistency check (Phase 4) compares one query against three chunked queries. This is needed because all-day and floating events are date-anchored, so DST and time-zone shifts can move them by up to a day relative to a UTC window.
-  - **Length, not age:** the cap limits window **length** only. Windows may be arbitrarily far in the past, for example a crashed cron job reprocessing a week- or month-old session with its absolute UTC times.
+  - **Length, not age:** the cap limits window **length** only. Windows may be far in the past, down to the 1970-01-01T00:00:00Z floor, and may end no later than 9999-12-30T23:59:59Z (both after padding), for example a crashed cron job reprocessing a week- or month-old session with its absolute UTC times.
 
   No chunking in v0.1.
 - R14. `import macos_calendar_events` succeeds on non-macOS and without PyObjC. EventKit is imported lazily, and only `_eventkit.py` imports `EventKit`/`Foundation`/`AppKit`/`objc` (enforced by `scripts/check_readonly.sh`).
@@ -148,7 +148,7 @@ The **Type and Signature Sketch** (Technical Specifications) is the single sourc
 - Delegate calendars. Phase 0 found all 15 delegate sources already among the default store's sources, so nothing is excluded on that Mac. Exchange-specific delegate handling is unverified; if a consumer finds delegates missing, `initWithSources:` is a follow-up.
 - Detecting which app TCC attributes a request to (remediation text is generic, R9).
 - Converting to or presenting local time (the consumer's concern; R12).
-- Windows over the R13 cap, Python < 3.11, macOS < 14 (R19), publishing to PyPI (release is a follow-up plan).
+- Windows over the R13 cap, Python < 3.11, macOS < 14 (R19), publishing to PyPI (done after this plan: PR #2 added the package URLs, PR #3 the trusted-publishing workflow, and 0.1.0 is on PyPI).
 - Optimizing CLI startup latency or running a resident server/daemon for consumers (R18 accepts ~100–200 ms per call).
 - Merging duplicate rows when one invite appears in several calendars. Rows stay separate; consumers dedupe on `(external_id, occurrence_start)` when `external_id` is non-null (R3).
 
@@ -1244,8 +1244,10 @@ Findings per round: 18, 14, 16, 5, 10, 6. The ledger ended `non-converge`: after
 
 ### Next step
 
-Phase 0 is done and the plan was reviewed (marker above). Remaining: merge PR #1 (open, branch pushed), tag `v0.1.0`, then run the post-merge schema `$id` check listed in the PR.
+Done. PR #1 merged, `v0.1.0` tagged and released on GitHub, and 0.1.0 uploaded to PyPI. The tag was moved once, after PR #2 added the PyPI project URLs, so the tag and the PyPI files match. The schema `$id` check passed against the tag. PR #3 adds trusted publishing; its first real run is the next release.
 
 ## Issues & Solutions
 
 ## Final Results
+
+`v0.1.0` shipped: read-only EventKit window query library and JSON CLI, schemas `window-v1` and `calendars-v1`, 866 tests passing. The review-gauntlet ran six rounds and ended `non-converge`; the findings in the shipped contract converged over rounds 1 to 4. Open follow-ups: verify the window cap at its full length with the live check, and Exchange delegate calendars.
