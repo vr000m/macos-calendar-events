@@ -1251,3 +1251,7 @@ Done. PR #1 merged, `v0.1.0` tagged and released on GitHub, and 0.1.0 uploaded t
 ## Final Results
 
 `v0.1.0` shipped: read-only EventKit window query library and JSON CLI, schemas `window-v1` and `calendars-v1`, 866 tests passing. The review-gauntlet ran six rounds and ended `non-converge`; the findings in the shipped contract converged over rounds 1 to 4. Open follow-ups: verify the window cap at its full length with the live check, and Exchange delegate calendars.
+
+### Documentation layout after 0.1.0 (2026-11-20)
+
+The [README](../../README.md) still covers installation and the first query. The detailed Phase 6 material now lives in [Calendar access](../calendar-access.md), the [CLI reference](../cli.md), and the [integration guide](../integration.md). Pytest runs the subprocess example from the integration guide.

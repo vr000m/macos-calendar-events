@@ -41,7 +41,7 @@ path = "src/macos_calendar_events/__init__.py"
 packages = ["src/macos_calendar_events"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "scripts", "docs/schema", "README.md", "CHANGELOG.md", "LICENSE"]
+include = ["src", "tests", "scripts", "docs/*.md", "docs/schema", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.uv]
 required-version = ">=0.9"
