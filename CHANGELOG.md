@@ -8,6 +8,9 @@ Release rule: the `$id` in the packaged and `docs/schema/` schemas names the rel
 ### Added
 - `.github/workflows/publish.yml` publishes to PyPI with trusted publishing when a GitHub release is published. It checks that the tag matches the package version, and the `pypi` environment needs a reviewer's approval before the upload.
 
+### Changed
+- The README starts with a PyPI quick start. Separate guides cover Calendar access, the CLI, and integration from another program.
+
 ## [0.1.0] - 2026-11-20
 ### Added
 - `macos-calendar-events` CLI: `window` (`--start`/`--end` as epoch seconds or RFC 3339 UTC, `--calendar`, `--pad-minutes`, `--include-notes`, `--prompt`), `calendars [--prompt]`, `schema {window-v1|calendars-v1}`, and `--version`. Exit codes 0–5 per the README contract.
