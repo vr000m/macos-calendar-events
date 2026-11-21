@@ -1,4 +1,4 @@
-"""The README's integration example returns events only for a schema-valid document (R18).
+"""The integration guide's example returns events only for a schema-valid document (R18).
 
 Any other outcome (a non-zero exit, a launch failure, bytes that are not JSON, a document
 the installed CLI's schema rejects, a schema that can't be used) is "no calendar hints".
@@ -15,16 +15,18 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-README = ROOT / "README.md"
+INTEGRATION_GUIDE = ROOT / "docs" / "integration.md"
 GOLDEN = json.loads((ROOT / "tests" / "golden" / "window-v1.json").read_text("utf-8"))
 SCHEMA = (files("macos_calendar_events") / "schema" / "window-v1.schema.json").read_bytes()
 
 
 def _calendar_hints() -> Callable[[int, int], Any]:
-    blocks = re.findall(r"```python\n(.*?)```", README.read_text("utf-8"), flags=re.DOTALL)
+    blocks = re.findall(
+        r"```python\n(.*?)```", INTEGRATION_GUIDE.read_text("utf-8"), flags=re.DOTALL
+    )
     [code] = [b for b in blocks if "def calendar_hints" in b]
     namespace: dict[str, Any] = {}
-    exec(compile(code, str(README), "exec"), namespace)
+    exec(compile(code, str(INTEGRATION_GUIDE), "exec"), namespace)
     hints: Callable[[int, int], Any] = namespace["calendar_hints"]
     return hints
 
