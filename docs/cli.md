@@ -10,7 +10,7 @@ macos-calendar-events window --start 1763568000 --end 1763571600 --pad-minutes 1
 
 | Flag | Default | Behaviour |
 | --- | --- | --- |
-| `--start`, `--end` | Required | Use whole Unix epoch seconds or RFC 3339 UTC with `Z` or `+00:00`, without surrounding whitespace. UTC strings accept up to six fractional digits and are truncated to whole seconds. |
+| `--start`, `--end` | Required | Use whole Unix epoch seconds or RFC 3339 UTC with `Z` or `+00:00`, without surrounding whitespace. UTC strings accept up to six fractional digits and are truncated to whole seconds. Anything else exits `2`. |
 | `--calendar ID_OR_TITLE` | All event calendars | Repeat to select multiple calendars. Each selector first looks for an ID match, then for case-insensitive title matches if the ID lookup finds nothing. |
 | `--pad-minutes N` | `0` | Extend both ends of the window by a non-negative number of whole minutes. |
 | `--include-notes` | Off | Include available event notes. By default, the `notes` field is `null`. |
@@ -40,7 +40,7 @@ macos-calendar-events schema calendars-v1
 - `calendars` returns `schema_version` and `calendars`.
 - Instants are UTC at whole-second precision. The `_ts` fields hold Unix epoch seconds for the corresponding text timestamps, including `occurrence_start_ts` for `occurrence_start`.
 - For all-day events, use `start_date` and the exclusive `end_date`. These are Gregorian `YYYY-MM-DD` dates. The UTC instants for all-day and floating events use the Mac's time zone at query time. `time_zone` is informational. Its value can be an IANA name, EventKit's raw name, or `null`.
-- Declined and cancelled events are included with their status. One invite can appear in more than one calendar. See the [integration guide](integration.md#json-compatibility) for deduplication and compatibility rules.
+- Declined and cancelled events are included with their status, so you decide what to drop. One invite can appear in more than one calendar. See the [integration guide](integration.md#json-compatibility) for deduplication and compatibility rules.
 
 See sample documents for [events](../tests/golden/window-v1.json) and [calendars](../tests/golden/calendars-v1.json).
 
@@ -50,7 +50,7 @@ See sample documents for [events](../tests/golden/window-v1.json) and [calendars
 | --- | --- |
 | `0` | Success. Query and schema commands write JSON to stdout. |
 | `1` | Internal error. Stderr gets a line naming the exception class. |
-| `2` | Usage or argument error, including an invalid time, window or padding. |
+| `2` | Usage or argument error: a bad time, epoch seconds out of range, `end <= start`, an end after `9999-12-30T23:59:59Z`, a window over the cap, or a negative or too large `--pad-minutes`. |
 | `3` | Full Calendar access is unavailable. See [Calendar access](calendar-access.md#troubleshooting-exit-3). |
 | `4` | EventKit is unavailable. Calendar queries require macOS 14 or newer and PyObjC. |
 | `5` | At least one `--calendar` selector matched nothing. |
@@ -60,6 +60,6 @@ Use stdout only on exit `0`. A failed write can leave partial output on exit `1`
 ## Query bounds and limitations
 
 - After padding, the start must be at or after `1970-01-01T00:00:00Z`. The end must be after the start and no later than `9999-12-30T23:59:59Z`.
-- A padded window can span at most 1,093 days. This cap leaves about a year of margin below a span where EventKit missed an event. The full 1,093-day span still needs live verification.
+- A padded window can span at most 1,093 days. This cap leaves about a year of margin below a span where EventKit missed an event. The full 1,093-day span still needs live verification. If the live check finds missing rows, a later release lowers the cap.
 - Event times are truncated to whole seconds before the overlap check. This can exclude an event that overlaps the window by less than a second.
-- EventKit also returns calendars unchecked in Calendar.app. Use `--calendar` to limit the query. Exchange delegate calendars are unverified.
+- EventKit also returns calendars unchecked in Calendar.app. Use `--calendar` to limit the query. Exchange delegate calendars are unverified. `external_id` may be null.

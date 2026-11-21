@@ -1,6 +1,6 @@
 # macos-calendar-events
 
-Query macOS Calendar through EventKit and get versioned JSON from a read-only CLI. It returns events that overlap a UTC time window, including attendee details. A meeting recorder can use those details as hints when identifying speakers.
+Query macOS Calendar through EventKit and get versioned JSON from a read-only CLI. It returns events that overlap a UTC time window, including attendee details. A meeting recorder can use those details as hints when identifying speakers. Ranking, matching or choosing "the" meeting is out of scope and belongs to the consumer.
 
 ## Quick start
 
@@ -20,7 +20,7 @@ Query a one-hour UTC window across all calendars EventKit exposes. Replace the d
 macos-calendar-events window --start 2025-11-19T16:00:00Z --end 2025-11-19T17:00:00Z
 ```
 
-Use `--calendar Work` to pick a calendar or `--pad-minutes 15` to extend both ends. The CLI only reads Calendar. It writes results to stdout, sends no data over the network, and returns notes as `null` unless you pass `--include-notes`.
+Use `--calendar Work` to pick a calendar or `--pad-minutes 15` to extend both ends. The CLI only reads Calendar. It writes results to stdout, writes no files, sends no data over the network, and returns notes as `null` unless you pass `--include-notes`. Error messages carry no event or calendar content.
 
 ## Documentation
 
@@ -28,7 +28,7 @@ Use `--calendar Work` to pick a calendar or `--pad-minutes 15` to extend both en
 - [CLI reference] covers commands, query semantics, exit codes and limitations.
 - [Integration guide] covers a schema-validated subprocess example and the public Python API.
 
-For tools that consume JSON, the CLI is the primary interface. Print the schemas shipped with your installation using `macos-calendar-events schema window-v1` or `macos-calendar-events schema calendars-v1`. The 0.1.0 release includes [window-v1] and [calendars-v1] schemas.
+For tools that consume JSON, the CLI and its JSON output are the stable contract. The Python API is also public but secondary. Print the schemas shipped with your installation using `macos-calendar-events schema window-v1` or `macos-calendar-events schema calendars-v1`. The 0.1.0 release includes [window-v1] and [calendars-v1] schemas.
 
 ## Release and license
 
