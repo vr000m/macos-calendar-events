@@ -18,7 +18,7 @@ Do the setup in a logged-in GUI session (`gui/$(id -u)`) and allow at least 70 s
 
 ## Standalone launchd or cron
 
-A one-shot LaunchAgent can grant access to the CLI's Python interpreter. The grant also covers cron jobs that run the CLI with that interpreter. Use the CLI's absolute path in job definitions. Find its directory with `uv tool dir --bin`. A typical location is `~/.local/bin`.
+A one-shot LaunchAgent can grant access to the CLI's Python interpreter. The grant also covers cron jobs that run the CLI with that interpreter. Use the CLI's absolute path in job definitions, because a launchd job's PATH does not include `~/.local/bin`. Find the directory with `uv tool dir --bin`.
 
 Save the following as `~/Library/LaunchAgents/local.macos-calendar-events.grant.plist`. Replace `/Users/yourname/.local/bin/macos-calendar-events` with the absolute path on your Mac.
 
@@ -49,7 +49,7 @@ launchctl bootout "gui/$(id -u)/local.macos-calendar-events.grant"
 
 ### cron
 
-Use absolute paths in crontab entries because cron runs with a minimal environment. This example lists calendars every 15 minutes and saves output and diagnostics separately.
+A cron job exits `3` until the CLI's interpreter is granted, and a grant from your terminal does not cover cron. Use the one-shot launchd recipe above, then the same job works. Use absolute paths in crontab entries because cron runs with a minimal environment. This example lists calendars every 15 minutes and saves output and diagnostics separately.
 
 ```crontab
 */15 * * * * /Users/yourname/.local/bin/macos-calendar-events calendars > /Users/yourname/calendars.json 2>> /Users/yourname/calendars.err
@@ -57,7 +57,7 @@ Use absolute paths in crontab entries because cron runs with a minimal environme
 
 ## Interpreter changes
 
-For a Python executable running under launchd or cron, macOS keys the grant to the interpreter's real path. A different Python version, upgrade, or reinstall can change that path. Pin an exact Python version when installing the CLI with uv and repeat the grant for the appropriate executable if the path changes.
+For a Python executable running under launchd or cron, macOS keys the grant to the interpreter's real path. A different Python version, upgrade, or reinstall can change that path. Pin an exact Python version when installing the CLI with uv. Without a pin, uv picks the newest Python it finds, for example 3.13, and the grant is keyed to that interpreter. Repeat the grant for the appropriate executable if the path changes.
 
 To resolve the Python interpreter used by a uv tool install:
 
@@ -72,4 +72,4 @@ System Settings lists the interpreter by binary name, such as `python3.12`. Any 
 - Check **System Settings → Privacy & Security → Calendars** for the terminal app or interpreter that ran the grant. Settings can toggle an existing entry. Run a query with `--prompt` to request a new grant.
 - If a terminal command succeeds and a job exits `3`, run the permission setup from the job's context.
 - If a grant arrives after a request times out, rerun the command to create a fresh EventKit store.
-- To clear a terminal app's Calendar decision during development, run `tccutil reset Calendar <bundle-id>` with the app's bundle ID. Omitting the bundle ID clears Calendar grants for every app.
+- To clear a terminal app's Calendar decision during development, run `tccutil reset Calendar <bundle-id>` with the app's bundle ID (you run it; the tool never does). Omitting the bundle ID clears Calendar grants for every app.

@@ -2,7 +2,7 @@
 
 ## Call the CLI from another program
 
-Resolve the executable's absolute path with `uv tool dir --bin` and append `macos-calendar-events`. Use a 10-second timeout for routine queries. Set up [Calendar access](calendar-access.md) separately so the caller can run without `--prompt`.
+Resolve the executable's absolute path with `uv tool dir --bin` and append `macos-calendar-events`. Use a 10-second timeout for routine queries: a cold query takes about 0.3 s, and the first launch of a fresh install about 1.6 s. Set up [Calendar access](calendar-access.md) separately so the caller can run without `--prompt`.
 
 Read stdout only after exit `0` and use the exit code to handle failures. Stderr is for diagnostics. For optional calendar hints, continue without hints if the process fails to launch, is killed, times out, returns a non-zero exit code, or produces JSON that fails schema or version validation.
 
@@ -78,12 +78,12 @@ print([calendar.title for calendar in mce.list_calendars(prompt=False)])
 
 | Call | Behaviour |
 | --- | --- |
-| `events_in_window(start, end, *, calendars=None, include_notes=False, prompt=True)` | Returns `list[Event]`. Bounds are integer epoch seconds or aware UTC datetimes. Pass a sequence of selectors such as `["Work"]`. |
+| `events_in_window(start, end, *, calendars=None, include_notes=False, prompt=True)` | Returns `list[Event]`. Bounds are integer epoch seconds or aware UTC datetimes. Pass a list of selectors such as `["Work"]`; a bare string raises `InvalidQueryError`. |
 | `list_calendars(*, prompt=True)` | Returns `list[CalendarInfo]`. |
 | `authorization_status()` | Returns the current `AccessStatus` without prompting. |
 | `request_access(timeout=60.0)` | Requests full Calendar access when macOS can prompt and returns `AccessStatus`. |
 
-Call query functions with `prompt=False` when no one can respond to a prompt. They can raise `CalendarAccessError`, `CalendarNotFoundError`, `EventKitUnavailableError`, or `InvalidQueryError` (also a `ValueError`). The [CLI window bounds](cli.md#query-bounds-and-limitations) also apply to `events_in_window`. To query a padded window in Python, adjust the bounds before calling.
+`events_in_window` and `list_calendars` default to `prompt=True`. Call them with `prompt=False` when no one can respond to a prompt. They can raise `CalendarAccessError`, `CalendarNotFoundError`, `EventKitUnavailableError`, or `InvalidQueryError` (also a `ValueError`). The [CLI window bounds](cli.md#query-bounds-and-limitations) also apply to `events_in_window`. To query a padded window in Python, adjust the bounds before calling.
 
 ## Install the CLI from source
 
