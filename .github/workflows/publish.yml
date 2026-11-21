@@ -1,0 +1,52 @@
+name: Publish to PyPI
+
+# Runs when a GitHub release is published. PyPI trusted publishing (OIDC): no token is
+# stored. The `pypi` environment requires a reviewer, so nothing uploads until approved.
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.12"
+      - name: Tag must match the package version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          VERSION=$(uv run --no-project python -c "import re,pathlib; print(re.search(r'^__version__ = \"(.+)\"', pathlib.Path('src/macos_calendar_events/__init__.py').read_text(), re.M).group(1))")
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "release tag $TAG does not match package version v$VERSION" >&2
+            exit 1
+          fi
+      - run: uv build
+      - run: uvx twine check dist/*
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/macos-calendar-events/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
